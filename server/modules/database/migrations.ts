@@ -260,6 +260,8 @@ const rebuildSessionsTableWithProjectSchema = (db: Database): void => {
     addColumnToTableIfNotExists(db, 'sessions', columnNames, 'isArchived', 'BOOLEAN DEFAULT 0');
     addColumnToTableIfNotExists(db, 'sessions', columnNames, 'created_at', 'DATETIME');
     addColumnToTableIfNotExists(db, 'sessions', columnNames, 'updated_at', 'DATETIME');
+    addColumnToTableIfNotExists(db, 'sessions', columnNames, 'is_pinned', 'INTEGER NOT NULL DEFAULT 0');
+    addColumnToTableIfNotExists(db, 'sessions', columnNames, 'title_source', 'TEXT DEFAULT NULL');
     db.exec('UPDATE sessions SET isArchived = COALESCE(isArchived, 0)');
     db.exec('UPDATE sessions SET created_at = COALESCE(created_at, CURRENT_TIMESTAMP)');
     db.exec('UPDATE sessions SET updated_at = COALESCE(updated_at, CURRENT_TIMESTAMP)');

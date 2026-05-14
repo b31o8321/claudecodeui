@@ -228,6 +228,24 @@ export const sessionsService = {
     }
 
     sessionsDb.updateSessionCustomName(sessionId, summary);
+    sessionsDb.setSessionTitleSource(sessionId, 'user');
     return { sessionId, summary };
+  },
+
+  /**
+   * Toggles the pinned state of one session, returning the new state.
+   */
+  toggleSessionPin(sessionId: string): { sessionId: string; isPinned: boolean } {
+    const session = sessionsDb.getSessionById(sessionId);
+    if (!session) {
+      throw new AppError(`Session "${sessionId}" was not found.`, {
+        code: 'SESSION_NOT_FOUND',
+        statusCode: 404,
+      });
+    }
+
+    const newPinnedState = !Boolean(session.is_pinned);
+    sessionsDb.setSessionPinned(sessionId, newPinnedState);
+    return { sessionId, isPinned: newPinnedState };
   },
 };

@@ -32,7 +32,15 @@
     "loadingSessions": "Loading sessions...",
     "unnamed": "Unnamed",
     "loading": "Loading...",
-    "showMore": "Show more sessions"
+    "showMore": "Show more sessions",
+    "bucketPinned": "Pinned",
+    "bucketToday": "Today",
+    "bucketYesterday": "Yesterday",
+    "bucketThisWeek": "This Week",
+    "bucketOlder": "Older"
+  },
+  "conversations": {
+    "empty": "No conversations yet"
   },
   "tooltips": {
     "viewEnvironments": "View Environments",
@@ -48,7 +56,8 @@
     "save": "Save",
     "cancel": "Cancel",
     "clearSearch": "Clear search",
-    "openCommandPalette": "Open command palette"
+    "openCommandPalette": "Open command palette",
+    "regenerateTitle": "Regenerate title with AI"
   },
   "navigation": {
     "chat": "Chat",
@@ -109,6 +118,21 @@
   },
   "version": {
     "updateAvailable": "Update available"
+  },
+  "update": {
+    "upstreamBadge": "↑ siteboon upstream",
+    "forkBadge": "↑ fork update",
+    "upstreamModalTitle": "Upstream update available",
+    "forkModalTitle": "Fork update available",
+    "copyPrompt": "Copy Claude Code prompt",
+    "copyPromptLabel": "Claude Code prompt",
+    "copyPromptHint": "Paste this into Claude Code — it will review upstream changes and apply what is relevant to this fork.",
+    "copyInstructions": "Copy instructions",
+    "copyInstructionsLabel": "Update instructions",
+    "viewChanges": "View changes on GitHub",
+    "viewRelease": "View release on GitHub",
+    "dismiss": "Dismiss",
+    "copied": "Copied!"
   },
   "search": {
     "modeProjects": "Projects",

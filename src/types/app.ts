@@ -1,6 +1,6 @@
 export type LLMProvider = 'claude' | 'cursor' | 'codex' | 'gemini';
 
-export type AppTab = 'chat' | 'files' | 'shell' | 'git' | 'tasks' | 'preview' | `plugin:${string}`;
+export type AppTab = 'chat' | 'files' | 'shell' | 'git' | 'preview' | `plugin:${string}`;
 
 export interface ProjectSession {
   id: string;
@@ -12,6 +12,7 @@ export interface ProjectSession {
   updated_at?: string;
   lastActivity?: string;
   messageCount?: number;
+  isPinned?: boolean;
   __provider?: LLMProvider;
   // Tags the session with the owning project's DB `projectId` so UI handlers
   // (session switching, sidebar focus, etc.) can match against selectedProject.
@@ -22,13 +23,6 @@ export interface ProjectSession {
 export interface ProjectSessionMeta {
   total?: number;
   hasMore?: boolean;
-  [key: string]: unknown;
-}
-
-export interface ProjectTaskmasterInfo {
-  hasTaskmaster?: boolean;
-  status?: string;
-  metadata?: Record<string, unknown>;
   [key: string]: unknown;
 }
 
@@ -47,7 +41,6 @@ export interface Project {
   codexSessions?: ProjectSession[];
   geminiSessions?: ProjectSession[];
   sessionMeta?: ProjectSessionMeta;
-  taskmaster?: ProjectTaskmasterInfo;
   [key: string]: unknown;
 }
 

@@ -91,7 +91,6 @@ type UseSidebarControllerArgs = {
   onLoadMoreSessions?: (projectId: string) => Promise<void> | void;
   // `projectId` is the DB-assigned identifier; callbacks use that post-migration.
   onProjectDelete?: (projectId: string) => void;
-  setCurrentProject: (project: Project) => void;
   setSidebarVisible: (visible: boolean) => void;
   sidebarVisible: boolean;
 };
@@ -109,7 +108,6 @@ export function useSidebarController({
   onSessionDelete,
   onLoadMoreSessions,
   onProjectDelete,
-  setCurrentProject,
   setSidebarVisible,
   sidebarVisible,
 }: UseSidebarControllerArgs) {
@@ -129,7 +127,18 @@ export function useSidebarController({
   const [deleteConfirmation, setDeleteConfirmation] = useState<DeleteProjectConfirmation | null>(null);
   const [sessionDeleteConfirmation, setSessionDeleteConfirmation] = useState<SessionDeleteConfirmation | null>(null);
   const [showVersionModal, setShowVersionModal] = useState(false);
-  const [searchMode, setSearchMode] = useState<SidebarSearchMode>('projects');
+  const [showForkModal, setShowForkModal] = useState(false);
+  const [searchMode, setSearchMode] = useState<SidebarSearchMode>(() => {
+    try {
+      const stored = localStorage.getItem('sidebar:searchMode:v1');
+      if (stored === 'projects' || stored === 'conversations' || stored === 'archived') {
+        return stored;
+      }
+    } catch {
+      // localStorage unavailable
+    }
+    return 'conversations';
+  });
   const [conversationResults, setConversationResults] = useState<ConversationSearchResults | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [searchProgress, setSearchProgress] = useState<SearchProgress | null>(null);
@@ -138,10 +147,13 @@ export function useSidebarController({
   const [isArchivedSessionsLoading, setIsArchivedSessionsLoading] = useState(false);
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
   const [optimisticStarByProjectId, setOptimisticStarByProjectId] = useState<Map<string, boolean>>(new Map());
+  const [optimisticPinBySessionId, setOptimisticPinBySessionId] = useState<Map<string, boolean>>(new Map());
   const [loadingMoreProjects, setLoadingMoreProjects] = useState<Set<string>>(new Set());
+  const [regeneratingTitleSessionIds, setRegeneratingTitleSessionIds] = useState<Set<string>>(new Set());
   const searchSeqRef = useRef(0);
   const eventSourceRef = useRef<EventSource | null>(null);
   const starToggleSequenceByProjectRef = useRef<Map<string, number>>(new Map());
+  const pinToggleSequenceBySessionRef = useRef<Map<string, number>>(new Map());
   const migrationStartedRef = useRef(false);
   const onRefreshRef = useRef(onRefresh);
 
@@ -444,6 +456,18 @@ export function useSidebarController({
     [onSessionSelect],
   );
 
+  const handleConversationSessionClick = useCallback(
+    (session: SessionWithProvider & { __projectId: string }) => {
+      // Find the parent project so both project and session are selected together.
+      const matchingProject = projects.find((p) => p.projectId === session.__projectId) ?? null;
+      if (matchingProject) {
+        onProjectSelect(matchingProject);
+      }
+      onSessionSelect({ ...session, __projectId: session.__projectId });
+    },
+    [onProjectSelect, onSessionSelect, projects],
+  );
+
   const resolveProjectStarState = useCallback(
     (projectId: string): boolean => {
       if (optimisticStarByProjectId.has(projectId)) {
@@ -515,6 +539,102 @@ export function useSidebarController({
   const isProjectStarred = useCallback(
     (projectId: string) => resolveProjectStarState(projectId),
     [resolveProjectStarState],
+  );
+
+  const resolveSessionPinState = useCallback(
+    (sessionId: string): boolean => {
+      if (optimisticPinBySessionId.has(sessionId)) {
+        return Boolean(optimisticPinBySessionId.get(sessionId));
+      }
+      for (const project of projects) {
+        const buckets = [project.sessions, project.cursorSessions, project.codexSessions, project.geminiSessions];
+        for (const bucket of buckets) {
+          if (!bucket) continue;
+          for (const session of bucket) {
+            if (session.id === sessionId && session.isPinned) return true;
+          }
+        }
+      }
+      return false;
+    },
+    [optimisticPinBySessionId, projects],
+  );
+
+  const togglePinSession = useCallback((sessionId: string) => {
+    const previousPinState = resolveSessionPinState(sessionId);
+    const optimisticPinState = !previousPinState;
+    const latestSequence = (pinToggleSequenceBySessionRef.current.get(sessionId) ?? 0) + 1;
+    pinToggleSequenceBySessionRef.current.set(sessionId, latestSequence);
+
+    setOptimisticPinBySessionId((previous) => {
+      const next = new Map(previous);
+      next.set(sessionId, optimisticPinState);
+      return next;
+    });
+
+    const updatePin = async () => {
+      try {
+        const response = await api.toggleSessionPin(sessionId);
+        if (!response.ok) {
+          throw new Error(`status ${response.status}`);
+        }
+        const payload = (await response.json()) as { isPinned?: boolean };
+        const isLatestSequence = pinToggleSequenceBySessionRef.current.get(sessionId) === latestSequence;
+        if (!isLatestSequence) return;
+        setOptimisticPinBySessionId((previous) => {
+          const next = new Map(previous);
+          next.set(sessionId, Boolean(payload.isPinned));
+          return next;
+        });
+      } catch (error) {
+        const isLatestSequence = pinToggleSequenceBySessionRef.current.get(sessionId) === latestSequence;
+        if (!isLatestSequence) return;
+        setOptimisticPinBySessionId((previous) => {
+          const next = new Map(previous);
+          next.set(sessionId, previousPinState);
+          return next;
+        });
+        console.error('[Sidebar] Failed to toggle session pin:', error);
+      }
+    };
+
+    void updatePin();
+  }, [resolveSessionPinState]);
+
+  const isSessionPinned = useCallback(
+    (sessionId: string) => resolveSessionPinState(sessionId),
+    [resolveSessionPinState],
+  );
+
+  const regenerateSessionTitle = useCallback((sessionId: string) => {
+    setRegeneratingTitleSessionIds((prev) => {
+      if (prev.has(sessionId)) return prev;
+      const next = new Set(prev);
+      next.add(sessionId);
+      return next;
+    });
+
+    const doRegenerate = async () => {
+      try {
+        await api.regenerateSessionTitle(sessionId);
+        await onRefreshRef.current();
+      } catch (error) {
+        console.error('[Sidebar] Failed to regenerate session title:', error);
+      } finally {
+        setRegeneratingTitleSessionIds((prev) => {
+          const next = new Set(prev);
+          next.delete(sessionId);
+          return next;
+        });
+      }
+    };
+
+    void doRegenerate();
+  }, []);
+
+  const isSessionTitleRegenerating = useCallback(
+    (sessionId: string) => regeneratingTitleSessionIds.has(sessionId),
+    [regeneratingTitleSessionIds],
   );
 
   const getProjectSessions = useCallback((project: Project) => getAllSessions(project), []);
@@ -770,9 +890,8 @@ export function useSidebarController({
   const handleProjectSelect = useCallback(
     (project: Project) => {
       onProjectSelect(project);
-      setCurrentProject(project);
     },
-    [onProjectSelect, setCurrentProject],
+    [onProjectSelect],
   );
 
   const openArchivedSession = useCallback((session: ArchivedSessionListItem) => {
@@ -887,6 +1006,15 @@ export function useSidebarController({
     [onRefresh, t],
   );
 
+  const persistSearchMode = useCallback((mode: SidebarSearchMode) => {
+    try {
+      localStorage.setItem('sidebar:searchMode:v1', mode);
+    } catch {
+      // localStorage unavailable
+    }
+    setSearchMode(mode);
+  }, []);
+
   const collapseSidebar = useCallback(() => {
     setSidebarVisible(false);
   }, [setSidebarVisible]);
@@ -913,6 +1041,7 @@ export function useSidebarController({
     deleteConfirmation,
     sessionDeleteConfirmation,
     showVersionModal,
+    showForkModal,
     filteredProjects,
     archivedProjects: filteredArchivedProjects,
     archivedSessions: filteredArchivedSessions,
@@ -922,6 +1051,10 @@ export function useSidebarController({
     handleSessionClick,
     toggleStarProject,
     isProjectStarred,
+    togglePinSession,
+    isSessionPinned,
+    regenerateSessionTitle,
+    isSessionTitleRegenerating,
     getProjectSessions,
     loadMoreSessionsForProject,
     startEditing,
@@ -944,7 +1077,8 @@ export function useSidebarController({
     setEditingSession,
     setEditingSessionName,
     searchMode,
-    setSearchMode,
+    setSearchMode: persistSearchMode,
+    handleConversationSessionClick,
     conversationResults,
     isSearching,
     searchProgress,
@@ -962,5 +1096,6 @@ export function useSidebarController({
     setDeleteConfirmation,
     setSessionDeleteConfirmation,
     setShowVersionModal,
+    setShowForkModal,
   };
 }

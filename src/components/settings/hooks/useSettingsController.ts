@@ -33,6 +33,7 @@ type ClaudeSettingsStorage = {
   disallowedTools?: string[];
   skipPermissions?: boolean;
   projectSortOrder?: ProjectSortOrder;
+  defaultWorkspacePath?: string;
 };
 
 type CursorSettingsStorage = {
@@ -52,7 +53,7 @@ type NotificationPreferencesResponse = {
 
 type ActiveLoginProvider = AgentProvider | '';
 
-const KNOWN_MAIN_TABS: SettingsMainTab[] = ['agents', 'appearance', 'git', 'api', 'tasks', 'notifications', 'plugins'];
+const KNOWN_MAIN_TABS: SettingsMainTab[] = ['agents', 'appearance', 'git', 'api', 'notifications', 'plugins'];
 
 const normalizeMainTab = (tab: string): SettingsMainTab => {
   // Keep backwards compatibility with older callers that still pass "tools".
@@ -122,6 +123,7 @@ export function useSettingsController({ isOpen, initialTab }: UseSettingsControl
   const [activeTab, setActiveTab] = useState<SettingsMainTab>(() => normalizeMainTab(initialTab));
   const [saveStatus, setSaveStatus] = useState<'success' | 'error' | null>(null);
   const [projectSortOrder, setProjectSortOrder] = useState<ProjectSortOrder>('name');
+  const [defaultWorkspacePath, setDefaultWorkspacePath] = useState<string>('');
   const [codeEditorSettings, setCodeEditorSettings] = useState<CodeEditorSettingsState>(() => (
     readCodeEditorSettings()
   ));
@@ -158,6 +160,7 @@ export function useSettingsController({ isOpen, initialTab }: UseSettingsControl
         skipPermissions: Boolean(savedClaudeSettings.skipPermissions),
       });
       setProjectSortOrder(savedClaudeSettings.projectSortOrder === 'date' ? 'date' : 'name');
+      setDefaultWorkspacePath(typeof savedClaudeSettings.defaultWorkspacePath === 'string' ? savedClaudeSettings.defaultWorkspacePath : '');
 
       const savedCursorSettings = parseJson<CursorSettingsStorage>(
         localStorage.getItem('cursor-tools-settings'),
@@ -231,6 +234,7 @@ export function useSettingsController({ isOpen, initialTab }: UseSettingsControl
         disallowedTools: claudePermissions.disallowedTools,
         skipPermissions: claudePermissions.skipPermissions,
         projectSortOrder,
+        defaultWorkspacePath,
         lastUpdated: now,
       }));
 
@@ -275,6 +279,7 @@ export function useSettingsController({ isOpen, initialTab }: UseSettingsControl
     notificationPreferences,
     geminiPermissionMode,
     projectSortOrder,
+    defaultWorkspacePath,
   ]);
 
   const updateCodeEditorSetting = useCallback(
@@ -365,6 +370,8 @@ export function useSettingsController({ isOpen, initialTab }: UseSettingsControl
     saveStatus,
     projectSortOrder,
     setProjectSortOrder,
+    defaultWorkspacePath,
+    setDefaultWorkspacePath,
     codeEditorSettings,
     updateCodeEditorSetting,
     claudePermissions,

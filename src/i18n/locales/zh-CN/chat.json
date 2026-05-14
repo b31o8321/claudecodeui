@@ -251,7 +251,21 @@
   "projectSelection": {
     "startChatWithProvider": "选择一个项目以开始与 {{provider}} 聊天"
   },
-  "tasks": {
-    "nextTaskPrompt": "开始下一个任务"
-  }
+  "statusBar": {
+    "context": "上下文",
+    "toolsUsed": "工具",
+    "detailsButton": "会话详情",
+    "unknownModel": "未知模型",
+    "noPricing": "模型 {{model}} 无定价信息",
+    "modal": {
+      "session": "会话",
+      "contextWindow": "上下文窗口",
+      "cumulativeTokens": "累计 Tokens",
+      "cost": "费用估算",
+      "tools": "使用的工具",
+      "todayActivity": "今日活动",
+      "mcpConfig": "MCP / CLAUDE.md"
+    }
+  },
+  "lastVisitDivider": "上次看到这里"
 }

@@ -5,6 +5,9 @@ import { providerMcpService } from '@/modules/providers/services/mcp.service.js'
 import { providerSkillsService } from '@/modules/providers/services/skills.service.js';
 import { sessionConversationsSearchService } from '@/modules/providers/services/session-conversations-search.service.js';
 import { sessionsService } from '@/modules/providers/services/sessions.service.js';
+import { sessionsDb } from '@/modules/database/index.js';
+import { titleGenerationQueue } from '@/modules/providers/services/title-generation-queue.service.js';
+import { generateSessionTitle } from '@/modules/providers/services/claude-title-generator.service.js';
 import type { LLMProvider, McpScope, McpTransport, UpsertProviderMcpServerInput } from '@/shared/types.js';
 import { AppError, asyncHandler, createApiSuccessResponse } from '@/shared/utils.js';
 
@@ -364,6 +367,51 @@ router.put(
   }),
 );
 
+router.post(
+  '/sessions/:sessionId/pin',
+  asyncHandler(async (req: Request, res: Response) => {
+    const sessionId = parseSessionId(req.params.sessionId);
+    const result = sessionsService.toggleSessionPin(sessionId);
+    res.json(createApiSuccessResponse(result));
+  }),
+);
+
+router.post(
+  '/sessions/:sessionId/regenerate-title',
+  asyncHandler(async (req: Request, res: Response) => {
+    const sessionId = parseSessionId(req.params.sessionId);
+    const session = sessionsDb.getSessionById(sessionId);
+    if (!session) {
+      throw new AppError(`Session "${sessionId}" was not found.`, {
+        code: 'SESSION_NOT_FOUND',
+        statusCode: 404,
+      });
+    }
+
+    if (session.provider !== 'claude' || !session.jsonl_path) {
+      res.json(createApiSuccessResponse({ sessionId, title: null }));
+      return;
+    }
+
+    // Don't overwrite user-assigned or already LLM-generated titles
+    if (session.title_source === 'user' || session.title_source === 'ai-event') {
+      res.json(createApiSuccessResponse({ sessionId, title: session.custom_name }));
+      return;
+    }
+
+    try {
+      const title = await generateSessionTitle(sessionId, session.jsonl_path);
+      if (title) {
+        sessionsDb.updateSessionCustomName(sessionId, title);
+        sessionsDb.setSessionTitleSource(sessionId, 'llm');
+      }
+      res.json(createApiSuccessResponse({ sessionId, title: title ?? null }));
+    } catch {
+      res.json(createApiSuccessResponse({ sessionId, title: null }));
+    }
+  }),
+);
+
 router.get(
   '/sessions/:sessionId/messages',
   asyncHandler(async (req: Request, res: Response) => {
@@ -402,6 +450,78 @@ router.get(
     res.json(result);
   }),
 );
+
+// ----------------- AI session title backfill routes -----------------
+router.get(
+  '/sessions/untitled-count',
+  asyncHandler(async (_req: Request, res: Response) => {
+    const count = sessionsDb.countUntitledClaudeSessions();
+    res.json(createApiSuccessResponse({ count }));
+  }),
+);
+
+router.post('/sessions/generate-titles', (req: Request, res: Response) => {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+
+  let closed = false;
+  req.on('close', () => {
+    closed = true;
+  });
+
+  const untitled = sessionsDb.getUntitledClaudeSessions();
+  const batchTotal = untitled.length;
+
+  if (batchTotal === 0) {
+    if (!closed) {
+      res.write(`event: done\ndata: ${JSON.stringify({ completed: 0, total: 0 })}\n\n`);
+      res.end();
+    }
+    return;
+  }
+
+  const baseCompleted = titleGenerationQueue.getProgress().completed;
+
+  for (const session of untitled) {
+    if (session.jsonl_path) {
+      titleGenerationQueue.enqueue(session.session_id, session.jsonl_path);
+    }
+  }
+
+  const pollInterval = setInterval(() => {
+    if (closed) {
+      clearInterval(pollInterval);
+      return;
+    }
+
+    const progress = titleGenerationQueue.getProgress();
+    const batchCompleted = Math.max(0, progress.completed - baseCompleted);
+    const batchDone = progress.queued === 0 && progress.inFlight === 0;
+
+    res.write(
+      `event: progress\ndata: ${JSON.stringify({
+        completed: batchCompleted,
+        total: batchTotal,
+        queued: progress.queued,
+        inFlight: progress.inFlight,
+      })}\n\n`,
+    );
+
+    if (batchDone) {
+      clearInterval(pollInterval);
+      if (!closed) {
+        res.write(
+          `event: done\ndata: ${JSON.stringify({ completed: batchCompleted, total: batchTotal })}\n\n`,
+        );
+        res.end();
+      }
+    }
+  }, 500);
+});
 
 router.get('/search/sessions', asyncHandler(async (req: Request, res: Response) => {
   const query = parseSessionSearchQuery(req.query.q);

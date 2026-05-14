@@ -174,27 +174,49 @@ export const filterProjects = (projects: Project[], searchFilter: string): Proje
   });
 };
 
-export const getTaskIndicatorStatus = (
-  project: Project,
-  mcpServerStatus: { hasMCPServer?: boolean; isConfigured?: boolean } | null,
-) => {
-  const projectConfigured = Boolean(project.taskmaster?.hasTaskmaster);
-  const mcpConfigured = Boolean(mcpServerStatus?.hasMCPServer && mcpServerStatus?.isConfigured);
+// ---------------------------------------------------------------------------
+// Time-bucket helpers (shared between project list and session list)
+// ---------------------------------------------------------------------------
 
-  if (projectConfigured && mcpConfigured) {
-    return 'fully-configured';
-  }
+export function startOfToday(): Date {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
 
-  if (projectConfigured) {
-    return 'taskmaster-only';
-  }
+export function startOfYesterday(): Date {
+  const d = startOfToday();
+  d.setDate(d.getDate() - 1);
+  return d;
+}
 
-  if (mcpConfigured) {
-    return 'mcp-only';
-  }
+export function startOfThisMonday(): Date {
+  const d = startOfToday();
+  const day = d.getDay(); // 0 = Sun, 1 = Mon
+  const diff = day === 0 ? 6 : day - 1;
+  d.setDate(d.getDate() - diff);
+  return d;
+}
 
-  return 'not-configured';
-};
+export type TimeBucketKey = 'today' | 'yesterday' | 'thisWeek' | 'older';
+
+/**
+ * Given a Date, return which time bucket it belongs to.
+ * Precompute today/yesterday/thisMonday before calling in a loop.
+ */
+export function getTimeBucket(
+  date: Date,
+  today: Date,
+  yesterday: Date,
+  thisMonday: Date,
+): TimeBucketKey {
+  if (date >= today) return 'today';
+  if (date >= yesterday) return 'yesterday';
+  if (date >= thisMonday) return 'thisWeek';
+  return 'older';
+}
+
+// ---------------------------------------------------------------------------
 
 export const normalizeProjectForSettings = (project: Project): SettingsProject => {
   const fallbackPath =

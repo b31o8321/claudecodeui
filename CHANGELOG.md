@@ -1,7 +1,63 @@
-# Changelog
+# Fork: b31o8321/claudecodeui
+
+This fork diverges from upstream at v1.31.5. Changes below are fork-specific.
+See the README for context and the upstream link.
+
+**Upstream:** [siteboon/claudecodeui](https://github.com/siteboon/claudecodeui)
+
+## [Unreleased]
+
+### Added
+
+- Filter sub-agent sessions (`isSidechain: true` or in `subagents/` dirs) from the sidebar list
+- Filter ephemeral project paths (`.claude/worktrees/agent-*`, `.slock/agents/`, `.claude-mem/`, `.claude/agents/`)
+- Filter claude-mem observer sessions (detected by first-line `queue-operation` marker)
+- Session pinning with optimistic UI updates
+- Time-bucket grouping for sessions: Pinned / Today / Yesterday / This Week / Older
+- Time-bucket grouping for projects: Starred / Today / Yesterday / This Week / Older; "Older" collapsed by default
+- Default workspace path setting (Settings → Appearance) auto-fills the Create Project dialog
+- Fallback session title from first user message preview (60 chars) when no AI title exists
+- On-demand LLM title regeneration (Haiku 4.5) using first 3 + last 3 messages, with per-session throttling
+- Status strip below the composer: model / git branch / elapsed time / context % / tool counts
+- Detail modal: context breakdown, cumulative tokens, cost estimate (per-model pricing), tool counts, today's activity from `~/.claude/stats-cache.json`
+- Per-session scroll position persistence across reloads and app switches
+- "Last visit" divider in the message stream above the first new message since last visit
+- WebSocket heartbeat: 30s server ping / 60s pong timeout
+- Frontend auto-reconnect with exponential backoff (2s → 30s cap)
+- 50KB rolling output buffer replayed on reconnect
+- Visual WebSocket connection-status indicator (green / amber / red dot)
+- Projects list stale-while-revalidate cache in `localStorage` (7-day TTL) — no full-page loading screen on subsequent visits
+- Two separate version-notification badges: upstream (`siteboon/claudecodeui`) and fork (`b31o8321/claudecodeui`) releases, each opening a manual-update info modal
+
+### Changed
+
+- Token/context calculation: now per-request input + cache tokens (not cumulative); denominator is the 200K Claude 4.x context window
+- GitHub Star badge and Report Issue link now point at the fork
+- Auto-update mechanism replaced with manual-update info modals (to prevent upstream changes from clobbering fork customizations)
+
+### Removed
+
+- TaskMaster feature entirely (~5600 lines across 110 files)
+- `POST /api/system/update` backend route
+- Discord / community links
+
+### Fixed
+
+- Token percentage display no longer inflates across a long session due to cumulative token counting
+
+---
+
+# Upstream Changelog
 
 All notable changes to CloudCLI UI will be documented in this file.
 
+
+## [1.32.0](https://github.com/siteboon/claudecodeui/compare/v1.31.5...v1.32.0) (2026-05-13)
+
+### Bug Fixes
+
+* add clarification on auto mode ([392c73b](https://github.com/siteboon/claudecodeui/commit/392c73b6933600ea8a589c5d4eff5f7b830f99c5))
+* enhance regex to correctly parse wrapper file paths for claude.exe ([#741](https://github.com/siteboon/claudecodeui/issues/741)) ([beb0a50](https://github.com/siteboon/claudecodeui/commit/beb0a50413beddfb16f6b49103e1b6b80567cb90))
 
 ## [1.31.5](https://github.com/siteboon/claudecodeui/compare/v1.31.4...v1.31.5) (2026-04-30)
 

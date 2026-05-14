@@ -24,6 +24,7 @@ type PtySessionEntry = {
   pty: IPty;
   ws: WebSocket | null;
   buffer: string[];
+  bufferByteSize: number;
   timeoutId: NodeJS.Timeout | null;
   projectPath: string;
   sessionId: string | null;
@@ -32,6 +33,15 @@ type PtySessionEntry = {
 const ptySessionsMap = new Map<string, PtySessionEntry>();
 const PTY_SESSION_TIMEOUT = 30 * 60 * 1000;
 const SHELL_URL_PARSE_BUFFER_LIMIT = 32768;
+
+/** Maximum bytes kept in the reconnect output buffer per session (50 KB). */
+const SESSION_BUFFER_MAX_BYTES = 50 * 1024;
+
+/** How often the server sends a WebSocket ping to each shell client (ms). */
+const HEARTBEAT_INTERVAL_MS = 30_000;
+
+/** How long without a pong before the server terminates the connection (ms). */
+const HEARTBEAT_TIMEOUT_MS = 60_000;
 
 type ShellWebSocketDependencies = {
   getSessionById: (sessionId: string) => { cliSessionId?: string } | null | undefined;
@@ -160,6 +170,43 @@ export function handleShellConnection(
   let urlDetectionBuffer = '';
   const announcedAuthUrls = new Set<string>();
 
+  // --- Heartbeat setup ---
+  let lastPong = Date.now();
+  let heartbeatInterval: NodeJS.Timeout | null = null;
+
+  function startHeartbeat(): void {
+    if (heartbeatInterval) {
+      clearInterval(heartbeatInterval);
+    }
+
+    lastPong = Date.now();
+
+    heartbeatInterval = setInterval(() => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.ping();
+
+        if (Date.now() - lastPong > HEARTBEAT_TIMEOUT_MS) {
+          console.warn('[WARN] Shell WebSocket: no pong received within timeout — terminating');
+          ws.terminate();
+        }
+      }
+    }, HEARTBEAT_INTERVAL_MS);
+  }
+
+  function stopHeartbeat(): void {
+    if (heartbeatInterval) {
+      clearInterval(heartbeatInterval);
+      heartbeatInterval = null;
+    }
+  }
+
+  ws.on('pong', () => {
+    lastPong = Date.now();
+  });
+
+  startHeartbeat();
+  // --- End heartbeat setup ---
+
   ws.on('message', async (rawMessage) => {
     try {
       const data = parseShellMessage(rawMessage);
@@ -274,6 +321,7 @@ export function handleShellConnection(
           pty: shellProcess,
           ws,
           buffer: [],
+          bufferByteSize: 0,
           timeoutId: null,
           projectPath,
           sessionId,
@@ -289,11 +337,14 @@ export function handleShellConnection(
             return;
           }
 
-          if (session.buffer.length < 5000) {
-            session.buffer.push(chunk);
-          } else {
-            session.buffer.shift();
-            session.buffer.push(chunk);
+          const chunkBytes = Buffer.byteLength(chunk, 'utf8');
+          session.buffer.push(chunk);
+          session.bufferByteSize += chunkBytes;
+
+          // Evict oldest chunks while the buffer exceeds the 50 KB cap.
+          while (session.bufferByteSize > SESSION_BUFFER_MAX_BYTES && session.buffer.length > 0) {
+            const evicted = session.buffer.shift()!;
+            session.bufferByteSize -= Buffer.byteLength(evicted, 'utf8');
           }
 
           if (session.ws && session.ws.readyState === WebSocket.OPEN) {
@@ -415,7 +466,10 @@ export function handleShellConnection(
         if (shellProcess) {
           shellProcess.resize(readNumber(data.cols, 80), readNumber(data.rows, 24));
         }
+        return;
       }
+
+      // keepalive and other unknown types are silently ignored.
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error('[ERROR] Shell WebSocket error:', message);
@@ -431,6 +485,8 @@ export function handleShellConnection(
   });
 
   ws.on('close', () => {
+    stopHeartbeat();
+
     if (!ptySessionKey) {
       return;
     }
@@ -448,6 +504,7 @@ export function handleShellConnection(
   });
 
   ws.on('error', (error) => {
+    stopHeartbeat();
     console.error('[ERROR] Shell WebSocket error:', error);
   });
 }

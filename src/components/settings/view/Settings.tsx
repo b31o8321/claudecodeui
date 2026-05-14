@@ -8,7 +8,6 @@ import AppearanceSettingsTab from '../view/tabs/AppearanceSettingsTab';
 import CredentialsSettingsTab from '../view/tabs/api-settings/CredentialsSettingsTab';
 import GitSettingsTab from '../view/tabs/git-settings/GitSettingsTab';
 import NotificationsSettingsTab from '../view/tabs/NotificationsSettingsTab';
-import TasksSettingsTab from '../view/tabs/tasks-settings/TasksSettingsTab';
 import PluginSettingsTab from '../../plugins/view/PluginSettingsTab';
 import AboutTab from '../view/tabs/AboutTab';
 import { useSettingsController } from '../hooks/useSettingsController';
@@ -23,6 +22,8 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
     saveStatus,
     projectSortOrder,
     setProjectSortOrder,
+    defaultWorkspacePath,
+    setDefaultWorkspacePath,
     codeEditorSettings,
     updateCodeEditorSetting,
     claudePermissions,
@@ -110,6 +111,8 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
                 <AppearanceSettingsTab
                   projectSortOrder={projectSortOrder}
                   onProjectSortOrderChange={setProjectSortOrder}
+                  defaultWorkspacePath={defaultWorkspacePath}
+                  onDefaultWorkspacePathChange={setDefaultWorkspacePath}
                   codeEditorSettings={codeEditorSettings}
                   onCodeEditorThemeChange={(value) => updateCodeEditorSetting('theme', value)}
                   onCodeEditorWordWrapChange={(value) => updateCodeEditorSetting('wordWrap', value)}
@@ -136,8 +139,6 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
                   projects={projects}
                 />
               )}
-
-              {activeTab === 'tasks' && <TasksSettingsTab />}
 
             {activeTab === 'notifications' && (
               <NotificationsSettingsTab

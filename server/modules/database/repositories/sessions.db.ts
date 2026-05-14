@@ -2,6 +2,8 @@ import { getConnection } from '@/modules/database/connection.js';
 import { projectsDb } from '@/modules/database/repositories/projects.db.js';
 import { normalizeProjectPath } from '@/shared/utils.js';
 
+export type TitleSource = 'user' | 'ai-event' | 'first-message' | 'llm' | 'fallback';
+
 type SessionRow = {
   session_id: string;
   provider: string;
@@ -9,13 +11,15 @@ type SessionRow = {
   jsonl_path: string | null;
   custom_name: string | null;
   isArchived: number;
+  is_pinned: number;
+  title_source: TitleSource | null;
   created_at: string;
   updated_at: string;
 };
 
 type SessionMetadataLookupRow = Pick<
   SessionRow,
-  'session_id' | 'provider' | 'project_path' | 'jsonl_path' | 'custom_name' | 'isArchived' | 'created_at' | 'updated_at'
+  'session_id' | 'provider' | 'project_path' | 'jsonl_path' | 'custom_name' | 'isArchived' | 'is_pinned' | 'title_source' | 'created_at' | 'updated_at'
 >;
 
 function normalizeTimestamp(value?: string): string | null {
@@ -89,7 +93,7 @@ export const sessionsDb = {
     const db = getConnection();
     const row = db
       .prepare(
-        `SELECT session_id, provider, project_path, jsonl_path, custom_name, isArchived, created_at, updated_at
+        `SELECT session_id, provider, project_path, jsonl_path, custom_name, isArchived, is_pinned, title_source, created_at, updated_at
          FROM sessions
          WHERE session_id = ?
          ORDER BY updated_at DESC
@@ -100,11 +104,20 @@ export const sessionsDb = {
     return row ?? null;
   },
 
+  setSessionTitleSource(sessionId: string, titleSource: TitleSource): void {
+    const db = getConnection();
+    db.prepare(
+      `UPDATE sessions
+       SET title_source = ?
+       WHERE session_id = ?`
+    ).run(titleSource, sessionId);
+  },
+
   getAllSessions(): SessionRow[] {
     const db = getConnection();
     return db
       .prepare(
-        `SELECT session_id, provider, project_path, jsonl_path, custom_name, isArchived, created_at, updated_at
+        `SELECT session_id, provider, project_path, jsonl_path, custom_name, isArchived, is_pinned, created_at, updated_at
          FROM sessions
          WHERE isArchived = 0`
       )
@@ -119,7 +132,7 @@ export const sessionsDb = {
     const db = getConnection();
     return db
       .prepare(
-        `SELECT session_id, provider, project_path, jsonl_path, custom_name, isArchived, created_at, updated_at
+        `SELECT session_id, provider, project_path, jsonl_path, custom_name, isArchived, is_pinned, created_at, updated_at
          FROM sessions
          WHERE isArchived = 1
          ORDER BY datetime(COALESCE(updated_at, created_at)) DESC, session_id DESC`
@@ -132,7 +145,7 @@ export const sessionsDb = {
     const normalizedProjectPath = normalizeProjectPath(projectPath);
     return db
       .prepare(
-        `SELECT session_id, provider, project_path, jsonl_path, custom_name, isArchived, created_at, updated_at
+        `SELECT session_id, provider, project_path, jsonl_path, custom_name, isArchived, is_pinned, created_at, updated_at
          FROM sessions
          WHERE project_path = ?
            AND isArchived = 0`
@@ -149,7 +162,7 @@ export const sessionsDb = {
     const normalizedProjectPath = normalizeProjectPath(projectPath);
     return db
       .prepare(
-        `SELECT session_id, provider, project_path, jsonl_path, custom_name, isArchived, created_at, updated_at
+        `SELECT session_id, provider, project_path, jsonl_path, custom_name, isArchived, is_pinned, created_at, updated_at
          FROM sessions
          WHERE project_path = ?`
       )
@@ -161,7 +174,7 @@ export const sessionsDb = {
     const normalizedProjectPath = normalizeProjectPath(projectPath);
     return db
       .prepare(
-        `SELECT session_id, provider, project_path, jsonl_path, custom_name, isArchived, created_at, updated_at
+        `SELECT session_id, provider, project_path, jsonl_path, custom_name, isArchived, is_pinned, created_at, updated_at
          FROM sessions
          WHERE project_path = ?
            AND isArchived = 0
@@ -218,8 +231,77 @@ export const sessionsDb = {
     ).run(isArchived ? 1 : 0, sessionId);
   },
 
+  setSessionPinned(sessionId: string, pinned: boolean): void {
+    const db = getConnection();
+    db.prepare(
+      `UPDATE sessions
+       SET is_pinned = ?
+       WHERE session_id = ?`
+    ).run(pinned ? 1 : 0, sessionId);
+  },
+
   deleteSessionById(sessionId: string): boolean {
     const db = getConnection();
     return db.prepare('DELETE FROM sessions WHERE session_id = ?').run(sessionId).changes > 0;
+  },
+
+  /**
+   * Returns all active Claude sessions whose title is still weak (default sentinel,
+   * first-message preview, or fallback). Used by the backfill endpoint.
+   */
+  getUntitledClaudeSessions(): Pick<SessionRow, 'session_id' | 'jsonl_path'>[] {
+    const db = getConnection();
+    return db
+      .prepare(
+        `SELECT session_id, jsonl_path
+         FROM sessions
+         WHERE provider = 'claude'
+           AND (
+             custom_name = 'Untitled Claude Session'
+             OR title_source IN ('first-message', 'fallback')
+             OR title_source IS NULL
+           )
+           AND isArchived = 0`,
+      )
+      .all() as Pick<SessionRow, 'session_id' | 'jsonl_path'>[];
+  },
+
+  /**
+   * Returns the count of active Claude sessions that still carry a weak title.
+   */
+  countUntitledClaudeSessions(): number {
+    const db = getConnection();
+    const row = db
+      .prepare(
+        `SELECT COUNT(*) AS count
+         FROM sessions
+         WHERE provider = 'claude'
+           AND (
+             custom_name = 'Untitled Claude Session'
+             OR title_source IN ('first-message', 'fallback')
+             OR title_source IS NULL
+           )
+           AND isArchived = 0`,
+      )
+      .get() as { count: number } | undefined;
+    return Number(row?.count ?? 0);
+  },
+
+  /**
+   * Returns active Claude sessions eligible for LLM title regeneration —
+   * those with weak title sources (not user-renamed or LLM-generated).
+   */
+  getSessionsNeedingTitleRegen(): Pick<SessionRow, 'session_id' | 'jsonl_path' | 'title_source'>[] {
+    const db = getConnection();
+    return db
+      .prepare(
+        `SELECT session_id, jsonl_path, title_source
+         FROM sessions
+         WHERE provider = 'claude'
+           AND isArchived = 0
+           AND title_source NOT IN ('user', 'ai-event', 'llm')
+           AND jsonl_path IS NOT NULL`,
+      )
+      .all() as Pick<SessionRow, 'session_id' | 'jsonl_path' | 'title_source'>[];
   },
 };

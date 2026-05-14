@@ -18,7 +18,7 @@ import ClaudeStatus from './ClaudeStatus';
 import ImageAttachment from './ImageAttachment';
 import PermissionRequestsBanner from './PermissionRequestsBanner';
 import ThinkingModeSelector from './ThinkingModeSelector';
-import TokenUsagePie from './TokenUsagePie';
+import ChatStatusBar from './ChatStatusBar';
 import {
   PromptInput,
   PromptInputHeader,
@@ -60,7 +60,10 @@ interface ChatComposerProps {
   onModeSwitch: () => void;
   thinkingMode: string;
   setThinkingMode: Dispatch<SetStateAction<string>>;
-  tokenBudget: { used?: number; total?: number } | null;
+  tokenBudget: { used?: number; total?: number; cumulative?: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheCreationTokens: number }; model?: string | null; costUSD?: number | null } | null;
+  toolCounts: Map<string, number>;
+  sessionStartedAt?: Date | number | null;
+  projectId?: string | null;
   slashCommandsCount: number;
   onToggleCommandMenu: () => void;
   hasInput: boolean;
@@ -116,6 +119,9 @@ export default function ChatComposer({
   thinkingMode,
   setThinkingMode,
   tokenBudget,
+  toolCounts,
+  sessionStartedAt,
+  projectId,
   slashCommandsCount,
   onToggleCommandMenu,
   hasInput,
@@ -361,8 +367,6 @@ export default function ChatComposer({
               <ThinkingModeSelector selectedMode={thinkingMode} onModeChange={setThinkingMode} onClose={() => {}} className="" />
             )}
 
-            <TokenUsagePie used={tokenBudget?.used || 0} total={tokenBudget?.total || parseInt(import.meta.env.VITE_CONTEXT_WINDOW) || 160000} />
-
             <PromptInputButton
               tooltip={{ content: t('input.showAllCommands') }}
               onClick={onToggleCommandMenu}
@@ -413,6 +417,15 @@ export default function ChatComposer({
           </div>
         </PromptInputFooter>
       </PromptInput>
+
+      {/* Status bar — thin strip below the composer */}
+      <ChatStatusBar
+        tokenBudget={tokenBudget}
+        toolCounts={toolCounts}
+        sessionStartedAt={sessionStartedAt}
+        projectId={projectId}
+        permissionMode={permissionMode}
+      />
       </div>}
     </div>
   );

@@ -16,12 +16,21 @@ type ProjectCreationWizardProps = {
   onProjectCreated?: (project?: Record<string, unknown>) => void;
 };
 
-const initialFormState: WizardFormState = {
-  workspacePath: '',
-  githubUrl: '',
-  tokenMode: 'stored',
-  selectedGithubToken: '',
-  newGithubToken: '',
+const readDefaultWorkspacePath = (): string => {
+  try {
+    const raw = localStorage.getItem('claude-settings');
+    if (!raw) return '';
+    const parsed = JSON.parse(raw) as { defaultWorkspacePath?: string };
+    const stored = typeof parsed.defaultWorkspacePath === 'string' ? parsed.defaultWorkspacePath.trim() : '';
+    if (!stored) return '';
+    // Expand leading ~ to home directory equivalent at read time.
+    // We rely on the server to resolve the full path on creation; the client
+    // just uses the stored string as-is for display since we don't have access
+    // to os.homedir() in the browser.
+    return stored;
+  } catch {
+    return '';
+  }
 };
 
 export default function ProjectCreationWizard({
@@ -30,7 +39,13 @@ export default function ProjectCreationWizard({
 }: ProjectCreationWizardProps) {
   const { t } = useTranslation();
   const [step, setStep] = useState<WizardStep>(1);
-  const [formState, setFormState] = useState<WizardFormState>(initialFormState);
+  const [formState, setFormState] = useState<WizardFormState>(() => ({
+    workspacePath: readDefaultWorkspacePath(),
+    githubUrl: '',
+    tokenMode: 'stored',
+    selectedGithubToken: '',
+    newGithubToken: '',
+  }));
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [cloneProgress, setCloneProgress] = useState('');

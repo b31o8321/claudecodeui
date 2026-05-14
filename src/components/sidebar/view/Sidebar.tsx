@@ -5,21 +5,14 @@ import { useDeviceSettings } from '../../../hooks/useDeviceSettings';
 import { useVersionCheck } from '../../../hooks/useVersionCheck';
 import { useUiPreferences } from '../../../hooks/useUiPreferences';
 import { useSidebarController } from '../hooks/useSidebarController';
-import { useTaskMaster } from '../../../contexts/TaskMasterContext';
 import { usePaletteOps } from '../../../contexts/PaletteOpsContext';
-import { useTasksSettings } from '../../../contexts/TasksSettingsContext';
 import type { Project, LLMProvider } from '../../../types/app';
-import type { MCPServerStatus, SidebarProps } from '../types/types';
+import type { SidebarProps } from '../types/types';
 
 import SidebarCollapsed from './subcomponents/SidebarCollapsed';
 import SidebarContent from './subcomponents/SidebarContent';
 import SidebarModals from './subcomponents/SidebarModals';
 import type { SidebarProjectListProps } from './subcomponents/SidebarProjectList';
-
-type TaskMasterSidebarContext = {
-  setCurrentProject: (project: Project) => void;
-  mcpServerStatus: MCPServerStatus;
-};
 
 function Sidebar({
   projects,
@@ -42,14 +35,18 @@ function Sidebar({
 }: SidebarProps) {
   const { t } = useTranslation(['sidebar', 'common']);
   const { isPWA } = useDeviceSettings({ trackMobile: false });
-  const { updateAvailable, latestVersion, currentVersion, releaseInfo, installMode } = useVersionCheck(
+  const { updateAvailable, latestVersion, currentVersion, releaseInfo } = useVersionCheck(
     'siteboon',
     'claudecodeui',
   );
+  // Parallel check for the fork's own releases — silent 404 when no releases exist
+  const {
+    updateAvailable: forkUpdateAvailable,
+    latestVersion: forkLatestVersion,
+    releaseInfo: forkReleaseInfo,
+  } = useVersionCheck('b31o8321', 'claudecodeui');
   const { preferences, setPreference } = useUiPreferences();
   const { sidebarVisible } = preferences;
-  const { setCurrentProject, mcpServerStatus } = useTaskMaster() as TaskMasterSidebarContext;
-  const { tasksEnabled } = useTasksSettings();
   const paletteOps = usePaletteOps();
 
   const {
@@ -74,6 +71,7 @@ function Sidebar({
     deleteConfirmation,
     sessionDeleteConfirmation,
     showVersionModal,
+    showForkModal,
     filteredProjects,
     archivedProjects,
     archivedSessions,
@@ -81,8 +79,13 @@ function Sidebar({
     isArchivedSessionsLoading,
     toggleProject,
     handleSessionClick,
+    handleConversationSessionClick,
     toggleStarProject,
     isProjectStarred,
+    togglePinSession,
+    isSessionPinned,
+    regenerateSessionTitle,
+    isSessionTitleRegenerating,
     getProjectSessions,
     loadingMoreProjects,
     loadMoreSessionsForProject,
@@ -109,6 +112,7 @@ function Sidebar({
     setDeleteConfirmation,
     setSessionDeleteConfirmation,
     setShowVersionModal,
+    setShowForkModal,
   } = useSidebarController({
     projects,
     selectedProject,
@@ -122,7 +126,6 @@ function Sidebar({
     onSessionDelete,
     onLoadMoreSessions,
     onProjectDelete,
-    setCurrentProject,
     setSidebarVisible: (visible) => setPreference('sidebarVisible', visible),
     sidebarVisible,
   });
@@ -155,15 +158,16 @@ function Sidebar({
     editingSession,
     editingSessionName,
     deletingProjects,
-    tasksEnabled,
-    mcpServerStatus,
     getProjectSessions,
     loadingMoreProjects,
     isProjectStarred,
+    isSessionPinned,
+    searchFilter,
     onEditingNameChange: setEditingName,
     onToggleProject: toggleProject,
     onProjectSelect: handleProjectSelect,
     onToggleStarProject: toggleStarProject,
+    onTogglePin: togglePinSession,
     onStartEditingProject: startEditing,
     onCancelEditingProject: cancelEditing,
     onSaveProjectName: (projectName) => {
@@ -210,7 +214,10 @@ function Sidebar({
         releaseInfo={releaseInfo}
         currentVersion={currentVersion}
         latestVersion={latestVersion}
-        installMode={installMode}
+        showForkModal={showForkModal}
+        onCloseForkModal={() => setShowForkModal(false)}
+        forkReleaseInfo={forkReleaseInfo}
+        forkLatestVersion={forkLatestVersion}
         t={t}
       />
 
@@ -220,6 +227,8 @@ function Sidebar({
           onShowSettings={onShowSettings}
           updateAvailable={updateAvailable}
           onShowVersionModal={() => setShowVersionModal(true)}
+          forkUpdateAvailable={forkUpdateAvailable}
+          onShowForkModal={() => setShowForkModal(true)}
           t={t}
         />
       ) : (
@@ -294,8 +303,34 @@ function Sidebar({
             latestVersion={latestVersion}
             currentVersion={currentVersion}
             onShowVersionModal={() => setShowVersionModal(true)}
+            forkUpdateAvailable={forkUpdateAvailable}
+            forkLatestVersion={forkLatestVersion}
+            onShowForkModal={() => setShowForkModal(true)}
             onShowSettings={onShowSettings}
             projectListProps={projectListProps}
+            selectedSession={selectedSession}
+            selectedProject={selectedProject}
+            currentTime={projectListProps.currentTime}
+            editingSession={editingSession}
+            editingSessionName={editingSessionName}
+            onEditingSessionNameChange={setEditingSessionName}
+            onStartEditingSession={(sessionId, initialName) => {
+              setEditingSession(sessionId);
+              setEditingSessionName(initialName);
+            }}
+            onCancelEditingSession={() => {
+              setEditingSession(null);
+              setEditingSessionName('');
+            }}
+            onSaveEditingSession={(projectId: string, sessionId: string, summary: string, provider: LLMProvider) => {
+              void updateSessionSummary(projectId, sessionId, summary, provider);
+            }}
+            onConversationSessionClick={handleConversationSessionClick}
+            onDeleteConversationSession={showDeleteSessionConfirmation}
+            onTogglePin={togglePinSession}
+            isSessionPinned={isSessionPinned}
+            onRegenerateTitle={regenerateSessionTitle}
+            isSessionTitleRegenerating={isSessionTitleRegenerating}
             t={t}
           />
         </>

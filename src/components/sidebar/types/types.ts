@@ -6,6 +6,9 @@ export type ArchivedProjectListItem = Project & { isArchived: true };
 
 export type SessionWithProvider = ProjectSession & {
   __provider: LLMProvider;
+  /** Set by SidebarConversationList when flattening across all projects. */
+  __projectDisplayName?: string;
+  __projectPath?: string;
 };
 
 export type ArchivedSessionListItem = {

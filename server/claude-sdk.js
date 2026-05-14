@@ -285,6 +285,16 @@ function transformMessage(sdkMessage) {
 }
 
 /**
+ * Per-1M-token rates (USD) for cost estimation.
+ * Format: [inputRate, outputRate] — cache_creation uses inputRate, cache_read uses inputRate * 0.1
+ */
+const MODEL_RATES = {
+  'claude-opus-4-7': [15, 75],
+  'claude-sonnet-4-6': [3, 15],
+  'claude-haiku-4-5': [0.80, 4],
+};
+
+/**
  * Extracts token usage from SDK result messages
  * @param {Object} resultMessage - SDK result message
  * @returns {Object|null} Token budget object or null
@@ -302,25 +312,50 @@ function extractTokenBudget(resultMessage) {
     return null;
   }
 
-  // Use cumulative tokens if available (tracks total for the session)
-  // Otherwise fall back to per-request tokens
-  const inputTokens = modelData.cumulativeInputTokens || modelData.inputTokens || 0;
-  const outputTokens = modelData.cumulativeOutputTokens || modelData.outputTokens || 0;
-  const cacheReadTokens = modelData.cumulativeCacheReadInputTokens || modelData.cacheReadInputTokens || 0;
-  const cacheCreationTokens = modelData.cumulativeCacheCreationInputTokens || modelData.cacheCreationInputTokens || 0;
+  // Use the LAST request's tokens (not cumulative) because Claude re-sends the
+  // full history every turn — so per-request input + cache tokens IS the current
+  // context window usage. Cumulative across turns is meaningless for "used now".
+  // Output tokens are NOT counted toward context — they're a separate output budget.
+  const inputTokens = modelData.inputTokens || 0;
+  const cacheReadTokens = modelData.cacheReadInputTokens || 0;
+  const cacheCreationTokens = modelData.cacheCreationInputTokens || 0;
 
-  // Total used = input + output + cache tokens
-  const totalUsed = inputTokens + outputTokens + cacheReadTokens + cacheCreationTokens;
+  const totalUsed = inputTokens + cacheReadTokens + cacheCreationTokens;
 
-  // Use configured context window budget from environment (default 160000)
-  // This is the user's budget limit, not the model's context window
-  const contextWindow = parseInt(process.env.CONTEXT_WINDOW) || 160000;
+  // Claude 4.x default context window is 200K. Override via CONTEXT_WINDOW env.
+  const contextWindow = parseInt(process.env.CONTEXT_WINDOW) || 200000;
 
-  // Token calc logged via token-budget WS event
+  // Cumulative session-wide totals
+  const cumulativeInput = modelData.cumulativeInputTokens || 0;
+  const cumulativeOutput = modelData.cumulativeOutputTokens || 0;
+  const cumulativeCacheRead = modelData.cumulativeCacheReadInputTokens || 0;
+  const cumulativeCacheCreation = modelData.cumulativeCacheCreationInputTokens || 0;
+
+  // Model name (strip the modelKey prefix noise if present)
+  const model = modelKey || null;
+
+  // Cost calculation
+  let costUSD = null;
+  if (model && MODEL_RATES[model]) {
+    const [inputRate, outputRate] = MODEL_RATES[model];
+    costUSD =
+      (cumulativeInput / 1_000_000) * inputRate +
+      (cumulativeOutput / 1_000_000) * outputRate +
+      (cumulativeCacheCreation / 1_000_000) * inputRate +
+      (cumulativeCacheRead / 1_000_000) * inputRate * 0.1;
+  }
 
   return {
     used: totalUsed,
-    total: contextWindow
+    total: contextWindow,
+    cumulative: {
+      inputTokens: cumulativeInput,
+      outputTokens: cumulativeOutput,
+      cacheReadTokens: cumulativeCacheRead,
+      cacheCreationTokens: cumulativeCacheCreation,
+    },
+    model,
+    costUSD,
   };
 }
 

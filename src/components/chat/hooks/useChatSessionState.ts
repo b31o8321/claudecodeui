@@ -132,6 +132,8 @@ export function useChatSessionState({
   const pendingInitialScrollRef = useRef(true);
   const messagesOffsetRef = useRef(0);
   const scrollPositionRef = useRef({ height: 0, top: 0 });
+  const scrollSaveTimerRef = useRef<number | null>(null);
+  const lastSeenSaveTimerRef = useRef<number | null>(null);
   const loadAllFinishedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const loadAllOverlayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastLoadedSessionKeyRef = useRef<string | null>(null);
@@ -256,6 +258,17 @@ export function useChatSessionState({
     if (viewHiddenCount > 0) setViewHiddenCount(0);
   }
 
+  // Compute tool counts from normalized store messages
+  const toolCounts = useMemo<Map<string, number>>(() => {
+    const counts = new Map<string, number>();
+    for (const msg of storeMessages) {
+      if (msg.kind === 'tool_use' && msg.toolName) {
+        counts.set(msg.toolName, (counts.get(msg.toolName) || 0) + 1);
+      }
+    }
+    return counts;
+  }, [storeMessages]);
+
   const chatMessages = useMemo(() => {
     const all = normalizedToChatMessages(storeMessages);
     // Show pending user message when no session data exists yet (new session, pre-backend-response)
@@ -296,6 +309,23 @@ export function useChatSessionState({
     container.scrollTop = container.scrollHeight;
   }, []);
 
+  /** Persist the last-seen message timestamp so we can show a "Last visit" divider on return. */
+  const saveLastSeenMessage = useCallback((msgs: ChatMessage[], sessionId: string) => {
+    if (!msgs.length) return;
+    const lastMsg = msgs[msgs.length - 1];
+    const ts = lastMsg.timestamp instanceof Date
+      ? lastMsg.timestamp.getTime()
+      : typeof lastMsg.timestamp === 'number'
+        ? lastMsg.timestamp
+        : new Date(String(lastMsg.timestamp)).getTime();
+    if (!Number.isFinite(ts)) return;
+    try {
+      localStorage.setItem(`chat-last-seen:${sessionId}`, JSON.stringify({ ts, savedAt: Date.now() }));
+    } catch {
+      // ignore quota / private-mode errors
+    }
+  }, []);
+
   const scrollToBottomAndReset = useCallback(() => {
     scrollToBottom();
     if (allMessagesLoaded) {
@@ -303,7 +333,11 @@ export function useChatSessionState({
       setAllMessagesLoaded(false);
       allMessagesLoadedRef.current = false;
     }
-  }, [allMessagesLoaded, scrollToBottom]);
+    const sessionId = selectedSession?.id;
+    if (sessionId) {
+      saveLastSeenMessage(chatMessages, sessionId);
+    }
+  }, [allMessagesLoaded, chatMessages, saveLastSeenMessage, scrollToBottom, selectedSession?.id]);
 
   const isNearBottom = useCallback(() => {
     const container = scrollContainerRef.current;
@@ -311,6 +345,43 @@ export function useChatSessionState({
     const { scrollTop, scrollHeight, clientHeight } = container;
     return scrollHeight - scrollTop - clientHeight < 50;
   }, []);
+
+  /** Index (in chatMessages) of the last message the user previously saw.
+   *  Returns null when no divider should appear. */
+  const lastSeenDividerIndex = useMemo<number | null>(() => {
+    const sessionId = selectedSession?.id;
+    if (!sessionId || chatMessages.length === 0) return null;
+    let savedTs: number | null = null;
+    try {
+      const raw = localStorage.getItem(`chat-last-seen:${sessionId}`);
+      if (raw) {
+        const parsed = JSON.parse(raw) as { ts?: number };
+        if (typeof parsed.ts === 'number') savedTs = parsed.ts;
+      }
+    } catch {
+      return null;
+    }
+    if (savedTs === null) return null;
+
+    // Find the message whose timestamp matches the saved one
+    let foundIndex = -1;
+    for (let i = chatMessages.length - 1; i >= 0; i--) {
+      const msg = chatMessages[i];
+      const msgTs = msg.timestamp instanceof Date
+        ? msg.timestamp.getTime()
+        : typeof msg.timestamp === 'number'
+          ? msg.timestamp
+          : new Date(String(msg.timestamp)).getTime();
+      if (Number.isFinite(msgTs) && msgTs <= savedTs) {
+        foundIndex = i;
+        break;
+      }
+    }
+
+    // No divider if not found, or if it's already the last message
+    if (foundIndex === -1 || foundIndex >= chatMessages.length - 1) return null;
+    return foundIndex;
+  }, [chatMessages, selectedSession?.id]);
 
   const loadOlderMessages = useCallback(
     async (container: HTMLDivElement) => {
@@ -353,6 +424,38 @@ export function useChatSessionState({
     const nearBottom = isNearBottom();
     setIsUserScrolledUp(!nearBottom);
 
+    // Persist scroll position (debounced) so reloads / app-switches return here
+    const sessionId = selectedSession?.id;
+    if (sessionId) {
+      if (scrollSaveTimerRef.current) {
+        window.clearTimeout(scrollSaveTimerRef.current);
+      }
+      scrollSaveTimerRef.current = window.setTimeout(() => {
+        try {
+          // If user is at bottom, clear the stored position so next mount falls
+          // through to the default "scroll to bottom" behavior.
+          if (nearBottom) {
+            localStorage.removeItem(`chat-scroll:${sessionId}`);
+          } else {
+            localStorage.setItem(
+              `chat-scroll:${sessionId}`,
+              JSON.stringify({ top: container.scrollTop, height: container.scrollHeight, ts: Date.now() }),
+            );
+          }
+        } catch {
+          // localStorage may be unavailable (private mode, quota, etc.); ignore.
+        }
+      }, 250);
+
+      // When at bottom, persist the last-seen message so we can show a divider on next visit
+      if (nearBottom) {
+        if (lastSeenSaveTimerRef.current) window.clearTimeout(lastSeenSaveTimerRef.current);
+        lastSeenSaveTimerRef.current = window.setTimeout(() => {
+          saveLastSeenMessage(chatMessages, sessionId);
+        }, 300);
+      }
+    }
+
     if (!allMessagesLoadedRef.current) {
       const scrolledNearTop = container.scrollTop < 100;
       if (!scrolledNearTop) { topLoadLockRef.current = false; return; }
@@ -363,7 +466,7 @@ export function useChatSessionState({
       const didLoad = await loadOlderMessages(container);
       if (didLoad) topLoadLockRef.current = true;
     }
-  }, [isNearBottom, loadOlderMessages]);
+  }, [chatMessages, isNearBottom, loadOlderMessages, saveLastSeenMessage, selectedSession?.id]);
 
   useLayoutEffect(() => {
     if (!pendingScrollRestoreRef.current || !scrollContainerRef.current) return;
@@ -385,13 +488,44 @@ export function useChatSessionState({
     setIsUserScrolledUp(false);
   }, [selectedProject?.projectId, selectedSession?.id]);
 
-  // Initial scroll to bottom
+  // Initial scroll: prefer the per-session saved scroll position (from localStorage)
+  // so reloads and mobile app-switches return the user to where they were.
+  // Fall back to scroll-to-bottom when no saved position exists or is stale.
   useEffect(() => {
     if (!pendingInitialScrollRef.current || !scrollContainerRef.current || isLoadingSessionMessages) return;
     if (chatMessages.length === 0) { pendingInitialScrollRef.current = false; return; }
+    if (searchScrollActiveRef.current) return;
     pendingInitialScrollRef.current = false;
-    if (!searchScrollActiveRef.current) setTimeout(() => scrollToBottom(), 200);
-  }, [chatMessages.length, isLoadingSessionMessages, scrollToBottom]);
+
+    const sessionId = selectedSession?.id;
+    let restored = false;
+    if (sessionId) {
+      try {
+        const raw = localStorage.getItem(`chat-scroll:${sessionId}`);
+        if (raw) {
+          const saved = JSON.parse(raw) as { top?: number; ts?: number };
+          if (typeof saved.top === 'number' && saved.top > 0) {
+            setTimeout(() => {
+              const container = scrollContainerRef.current;
+              if (!container) return;
+              container.scrollTop = Math.min(saved.top!, container.scrollHeight - container.clientHeight);
+              setIsUserScrolledUp(true);
+            }, 200);
+            restored = true;
+          }
+        }
+      } catch {
+        // Ignore — fall through to scroll-to-bottom
+      }
+    }
+    if (!restored) {
+      setTimeout(() => {
+        scrollToBottom();
+        const sid = selectedSession?.id;
+        if (sid) saveLastSeenMessage(chatMessages, sid);
+      }, 200);
+    }
+  }, [chatMessages, isLoadingSessionMessages, saveLastSeenMessage, scrollToBottom, selectedSession?.id]);
 
   // Main session loading effect — store-based
   useEffect(() => {
@@ -792,6 +926,7 @@ export function useChatSessionState({
     setIsUserScrolledUp,
     tokenBudget,
     setTokenBudget,
+    toolCounts,
     visibleMessageCount,
     visibleMessages,
     loadEarlierMessages,
@@ -808,5 +943,6 @@ export function useChatSessionState({
     scrollToBottomAndReset,
     isNearBottom,
     handleScroll,
+    lastSeenDividerIndex,
   };
 }

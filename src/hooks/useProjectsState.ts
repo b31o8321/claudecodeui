@@ -217,6 +217,39 @@ const isUpdateAdditive = (
   );
 };
 
+// --- localStorage project cache (stale-while-revalidate) ---
+// Key includes a version suffix. Bump to 'v2' if the Project schema changes
+// in a breaking way so stale caches are silently ignored rather than decoded
+// into invalid shapes.
+const PROJECTS_CACHE_KEY = 'cached-projects:v1';
+const PROJECTS_CACHE_TTL_MS = 7 * 24 * 3600 * 1000; // 7 days
+
+function readCachedProjects(): Project[] | null {
+  try {
+    const tsRaw = localStorage.getItem(`${PROJECTS_CACHE_KEY}:ts`);
+    if (!tsRaw) return null;
+    const ts = Number(tsRaw);
+    if (!Number.isFinite(ts) || Date.now() - ts > PROJECTS_CACHE_TTL_MS) return null;
+    const raw = localStorage.getItem(PROJECTS_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return null;
+    return parsed as Project[];
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedProjects(projects: Project[]): void {
+  try {
+    localStorage.setItem(PROJECTS_CACHE_KEY, JSON.stringify(projects));
+    localStorage.setItem(`${PROJECTS_CACHE_KEY}:ts`, String(Date.now()));
+  } catch {
+    // Quota exceeded or private-mode storage — silently ignore.
+  }
+}
+// --- end cache helpers ---
+
 const VALID_TABS: Set<string> = new Set(['chat', 'files', 'shell', 'git', 'tasks', 'preview']);
 
 const isValidTab = (tab: string): tab is AppTab => {
@@ -242,7 +275,7 @@ export function useProjectsState({
   isMobile,
   activeSessions,
 }: UseProjectsStateArgs) {
-  const [projects, setProjects] = useState<Project[]>([]);
+  const [projects, setProjects] = useState<Project[]>(() => readCachedProjects() ?? []);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [selectedSession, setSelectedSession] = useState<ProjectSession | null>(null);
   const [activeTab, setActiveTab] = useState<AppTab>(readPersistedTab);
@@ -256,7 +289,11 @@ export function useProjectsState({
   }, [activeTab]);
 
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [isLoadingProjects, setIsLoadingProjects] = useState(true);
+  // If we have a valid cache, skip the full-page loading screen — paint
+  // immediately with cached data and revalidate in the background.
+  const [isLoadingProjects, setIsLoadingProjects] = useState<boolean>(() => readCachedProjects() === null);
+  // True while a background revalidation fetch is in-flight (cache hit path).
+  const [isRevalidating, setIsRevalidating] = useState<boolean>(false);
   const [loadingProgress, setLoadingProgress] = useState<LoadingProgress | null>(null);
   const [isInputFocused, setIsInputFocused] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -288,12 +325,24 @@ export function useProjectsState({
   const lastHandledMessageRef = useRef<AppSocketMessage | null>(null);
 
   const fetchProjects = useCallback(async ({ showLoadingState = true }: FetchProjectsOptions = {}) => {
+    const hasCachedData = readCachedProjects() !== null;
+
     try {
       if (showLoadingState) {
-        setIsLoadingProjects(true);
+        if (hasCachedData) {
+          // We already painted from cache — show a subtle revalidating indicator
+          // instead of the full-page loading screen.
+          setIsRevalidating(true);
+        } else {
+          setIsLoadingProjects(true);
+        }
       }
+
       const response = await api.projects();
       const projectData = (await response.json()) as Project[];
+
+      // Persist fresh data to cache before updating React state.
+      writeCachedProjects(projectData);
 
       setProjects((prevProjects) => {
         const projectsWithTaskMaster = mergeTaskMasterCache(projectData, prevProjects);
@@ -308,10 +357,16 @@ export function useProjectsState({
           : prevProjects;
       });
     } catch (error) {
-      console.error('Error fetching projects:', error);
+      if (hasCachedData) {
+        // Cache is still valid — don't blow away the UI, just log the error.
+        console.warn('Projects revalidation failed (cached data still shown):', error);
+      } else {
+        console.error('Error fetching projects:', error);
+      }
     } finally {
       if (showLoadingState) {
         setIsLoadingProjects(false);
+        setIsRevalidating(false);
       }
     }
   }, []);
@@ -321,48 +376,6 @@ export function useProjectsState({
     await fetchProjects({ showLoadingState: false });
   }, [fetchProjects]);
 
-  // Hydrates TaskMaster details for the given `projectId`. The project
-  // identifier comes directly from the DB-driven /api/projects response.
-  const hydrateProjectTaskMaster = useCallback(async (projectId: string) => {
-    if (!projectId) {
-      return;
-    }
-
-    try {
-      const response = await api.projectTaskmaster(projectId);
-      if (!response.ok) {
-        return;
-      }
-
-      const data = (await response.json()) as { taskmaster?: Project['taskmaster'] };
-      const taskMasterInfo = data.taskmaster;
-      if (!taskMasterInfo) {
-        return;
-      }
-
-      setProjects((previousProjects) =>
-        previousProjects.map((project) =>
-          project.projectId === projectId
-            ? { ...project, taskmaster: taskMasterInfo }
-            : project,
-        ),
-      );
-
-      setSelectedProject((previousProject) => {
-        if (!previousProject || previousProject.projectId !== projectId) {
-          return previousProject;
-        }
-
-        return {
-          ...previousProject,
-          taskmaster: taskMasterInfo,
-        };
-      });
-    } catch (error) {
-      console.error(`Error fetching TaskMaster info for project ${projectId}:`, error);
-    }
-  }, []);
-
   const openSettings = useCallback((tab = 'tools') => {
     setSettingsInitialTab(tab);
     setShowSettings(true);
@@ -371,14 +384,6 @@ export function useProjectsState({
   useEffect(() => {
     void fetchProjects();
   }, [fetchProjects]);
-
-  useEffect(() => {
-    if (!selectedProject?.projectId) {
-      return;
-    }
-
-    void hydrateProjectTaskMaster(selectedProject.projectId);
-  }, [hydrateProjectTaskMaster, selectedProject?.projectId]);
 
   // Auto-select the project when there is only one, so the user lands on the new session page
   useEffect(() => {
@@ -610,7 +615,7 @@ export function useProjectsState({
     (session: ProjectSession) => {
       setSelectedSession(session);
 
-      if (activeTab === 'tasks' || activeTab === 'preview') {
+      if (activeTab === 'preview') {
         setActiveTab('chat');
       }
 
@@ -857,6 +862,7 @@ export function useProjectsState({
     activeTab,
     sidebarOpen,
     isLoadingProjects,
+    isRevalidating,
     loadingProgress,
     isInputFocused,
     showSettings,

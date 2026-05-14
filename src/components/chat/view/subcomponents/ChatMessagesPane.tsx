@@ -1,5 +1,5 @@
+import React, { useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useCallback, useRef } from 'react';
 import type { Dispatch, RefObject, SetStateAction } from 'react';
 import type { ChatMessage } from '../../types/types';
 import type { Project, ProjectSession, LLMProvider } from '../../../../types/app';
@@ -26,9 +26,6 @@ interface ChatMessagesPaneProps {
   setCodexModel: (model: string) => void;
   geminiModel: string;
   setGeminiModel: (model: string) => void;
-  tasksEnabled: boolean;
-  isTaskMasterInstalled: boolean | null;
-  onShowAllTasks?: (() => void) | null;
   setInput: Dispatch<SetStateAction<string>>;
   isLoadingMoreMessages: boolean;
   hasMoreMessages: boolean;
@@ -50,6 +47,7 @@ interface ChatMessagesPaneProps {
   showRawParameters?: boolean;
   showThinking?: boolean;
   selectedProject: Project;
+  lastSeenDividerIndex?: number | null;
 }
 
 export default function ChatMessagesPane({
@@ -71,9 +69,6 @@ export default function ChatMessagesPane({
   setCodexModel,
   geminiModel,
   setGeminiModel,
-  tasksEnabled,
-  isTaskMasterInstalled,
-  onShowAllTasks,
   setInput,
   isLoadingMoreMessages,
   hasMoreMessages,
@@ -95,6 +90,7 @@ export default function ChatMessagesPane({
   showRawParameters,
   showThinking,
   selectedProject,
+  lastSeenDividerIndex,
 }: ChatMessagesPaneProps) {
   const { t } = useTranslation('chat');
   const messageKeyMapRef = useRef<WeakMap<ChatMessage, string>>(new WeakMap());
@@ -154,9 +150,6 @@ export default function ChatMessagesPane({
           setCodexModel={setCodexModel}
           geminiModel={geminiModel}
           setGeminiModel={setGeminiModel}
-          tasksEnabled={tasksEnabled}
-          isTaskMasterInstalled={isTaskMasterInstalled}
-          onShowAllTasks={onShowAllTasks}
           setInput={setInput}
         />
       ) : (
@@ -230,25 +223,44 @@ export default function ChatMessagesPane({
             </div>
           )}
 
-          {visibleMessages.map((message, index) => {
-            const prevMessage = index > 0 ? visibleMessages[index - 1] : null;
-            return (
-              <MessageComponent
-                key={getMessageKey(message)}
-                message={message}
-                prevMessage={prevMessage}
-                createDiff={createDiff}
-                onFileOpen={onFileOpen}
-                onShowSettings={onShowSettings}
-                onGrantToolPermission={onGrantToolPermission}
-                autoExpandTools={autoExpandTools}
-                showRawParameters={showRawParameters}
-                showThinking={showThinking}
-                selectedProject={selectedProject}
-                provider={provider}
-              />
-            );
-          })}
+          {(() => {
+            // Map lastSeenDividerIndex (in chatMessages space) to visibleMessages space
+            const offset = chatMessages.length - visibleMessages.length;
+            const dividerInVisible = lastSeenDividerIndex != null
+              ? lastSeenDividerIndex - offset
+              : -1;
+
+            return visibleMessages.map((message, index) => {
+              const prevMessage = index > 0 ? visibleMessages[index - 1] : null;
+              const showDivider = dividerInVisible >= 0 && index === dividerInVisible;
+              return (
+                <React.Fragment key={getMessageKey(message)}>
+                  <MessageComponent
+                    message={message}
+                    prevMessage={prevMessage}
+                    createDiff={createDiff}
+                    onFileOpen={onFileOpen}
+                    onShowSettings={onShowSettings}
+                    onGrantToolPermission={onGrantToolPermission}
+                    autoExpandTools={autoExpandTools}
+                    showRawParameters={showRawParameters}
+                    showThinking={showThinking}
+                    selectedProject={selectedProject}
+                    provider={provider}
+                  />
+                  {showDivider && (
+                    <div className="relative my-4 flex items-center gap-3 px-4">
+                      <div className="h-px flex-1 bg-amber-400/50" />
+                      <span className="text-[10px] font-medium uppercase tracking-wider text-amber-600 dark:text-amber-400">
+                        {t('lastVisitDivider', 'Last visit')}
+                      </span>
+                      <div className="h-px flex-1 bg-amber-400/50" />
+                    </div>
+                  )}
+                </React.Fragment>
+              );
+            });
+          })()}
         </>
       )}
     </div>

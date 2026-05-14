@@ -55,11 +55,10 @@ import {
 import gitRoutes from './routes/git.js';
 import authRoutes from './routes/auth.js';
 import cursorRoutes from './routes/cursor.js';
-import taskmasterRoutes from './routes/taskmaster.js';
-import mcpUtilsRoutes from './routes/mcp-utils.js';
 import commandsRoutes from './routes/commands.js';
 import settingsRoutes from './routes/settings.js';
 import agentRoutes from './routes/agent.js';
+import systemRoutes from './routes/system.js';
 import projectModuleRoutes from './modules/projects/projects.routes.js';
 import userRoutes from './routes/user.js';
 import geminiRoutes from './routes/gemini.js';
@@ -161,12 +160,6 @@ app.use('/api/git', authenticateToken, gitRoutes);
 // Cursor API Routes (protected)
 app.use('/api/cursor', authenticateToken, cursorRoutes);
 
-// TaskMaster API Routes (protected)
-app.use('/api/taskmaster', authenticateToken, taskmasterRoutes);
-
-// MCP utilities
-app.use('/api/mcp-utils', authenticateToken, mcpUtilsRoutes);
-
 // Commands API Routes (protected)
 app.use('/api/commands', authenticateToken, commandsRoutes);
 
@@ -187,6 +180,9 @@ app.use('/api/providers', authenticateToken, providerRoutes);
 
 // Agent API Routes (uses API key authentication)
 app.use('/api/agent', agentRoutes);
+
+// System stats/meta routes (protected)
+app.use('/api/system', authenticateToken, systemRoutes);
 
 // Serve public files (like api-docs.html)
 app.use(express.static(path.join(APP_ROOT, 'public')));
@@ -211,79 +207,9 @@ app.use(express.static(path.join(APP_ROOT, 'dist'), {
 // /api/config endpoint removed - no longer needed
 // Frontend now uses window.location for WebSocket URLs
 
-// System update endpoint
-app.post('/api/system/update', authenticateToken, async (req, res) => {
-    try {
-        // Get the project root directory (parent of server directory)
-        const projectRoot = APP_ROOT;
-
-        console.log('Starting system update from directory:', projectRoot);
-
-        // Platform deployments use their own update workflow from the project root.
-        const updateCommand = IS_PLATFORM
-        // In platform, husky and dev dependencies are not needed
-            ? 'npm run update:platform'
-            : installMode === 'git'
-                ? 'git checkout main && git pull && npm install'
-                : 'npm install -g @cloudcli-ai/cloudcli@latest';
-
-        const updateCwd = IS_PLATFORM || installMode === 'git'
-            ? projectRoot
-            : os.homedir();
-
-        const child = spawn('sh', ['-c', updateCommand], {
-            cwd: updateCwd,
-            env: process.env
-        });
-
-        let output = '';
-        let errorOutput = '';
-
-        child.stdout.on('data', (data) => {
-            const text = data.toString();
-            output += text;
-            console.log('Update output:', text);
-        });
-
-        child.stderr.on('data', (data) => {
-            const text = data.toString();
-            errorOutput += text;
-            console.error('Update error:', text);
-        });
-
-        child.on('close', (code) => {
-            if (code === 0) {
-                res.json({
-                    success: true,
-                    output: output || 'Update completed successfully',
-                    message: 'Update completed. Please restart the server to apply changes.'
-                });
-            } else {
-                res.status(500).json({
-                    success: false,
-                    error: 'Update command failed',
-                    output: output,
-                    errorOutput: errorOutput
-                });
-            }
-        });
-
-        child.on('error', (error) => {
-            console.error('Update process error:', error);
-            res.status(500).json({
-                success: false,
-                error: error.message
-            });
-        });
-
-    } catch (error) {
-        console.error('System update error:', error);
-        res.status(500).json({
-            success: false,
-            error: error.message
-        });
-    }
-});
+// NOTE: /api/system/update was removed — auto-update from the UI is disabled
+// in this fork. Updates are applied manually via `git pull && npm install`
+// after reviewing upstream changes with Claude Code.
 
 const expandWorkspacePath = (inputPath) => {
     if (!inputPath) return inputPath;
@@ -1434,8 +1360,42 @@ async function getFileTree(dirPath, maxDepth = 3, currentDepth = 0, showHidden =
     });
 }
 
-const SERVER_PORT = process.env.SERVER_PORT || 3001;
-const HOST = process.env.HOST || '0.0.0.0';
+// Load optional service config from ~/.cloudcli/config.json
+// Returns defaults when file is absent or malformed — does NOT throw.
+function loadServiceConfig() {
+    const defaults = { bind: 'lan', port: 3001, publicUrl: null };
+    try {
+        const configPath = path.join(os.homedir(), '.cloudcli', 'config.json');
+        const raw = fs.readFileSync(configPath, 'utf8');
+        const parsed = JSON.parse(raw);
+        return {
+            bind: typeof parsed.bind === 'string' ? parsed.bind : defaults.bind,
+            port: typeof parsed.port === 'number' ? parsed.port : defaults.port,
+            publicUrl: typeof parsed.publicUrl === 'string' ? parsed.publicUrl : defaults.publicUrl,
+        };
+    } catch {
+        return defaults;
+    }
+}
+
+const _serviceConfig = loadServiceConfig();
+
+// Binding precedence: env var > config file > built-in default
+function resolveHost(cfg) {
+    if (process.env.HOST) return process.env.HOST;
+    if (cfg.bind === 'localhost') return '127.0.0.1';
+    return '0.0.0.0'; // 'lan' or anything else → all interfaces
+}
+
+// Port precedence: SERVER_PORT env > PORT env > config file > built-in default
+function resolvePort(cfg) {
+    if (process.env.SERVER_PORT) return Number(process.env.SERVER_PORT);
+    if (process.env.PORT) return Number(process.env.PORT);
+    return cfg.port || 3001;
+}
+
+const SERVER_PORT = resolvePort(_serviceConfig);
+const HOST = resolveHost(_serviceConfig);
 const DISPLAY_HOST = getConnectableHost(HOST);
 const VITE_PORT = process.env.VITE_PORT || 5173;
 
@@ -1471,6 +1431,10 @@ async function startServer() {
             console.log(c.dim('═'.repeat(63)));
             console.log('');
             console.log(`${c.info('[INFO]')} Server URL:  ${c.bright('http://' + DISPLAY_HOST + ':' + SERVER_PORT)}`);
+            console.log(`${c.info('[INFO]')} Bind mode:   ${c.dim(HOST + ':' + SERVER_PORT + ' (' + (_serviceConfig.bind || 'lan') + ')')}`);
+            if (_serviceConfig.publicUrl) {
+                console.log(`${c.info('[INFO]')} Public URL:  ${c.bright(_serviceConfig.publicUrl)}`);
+            }
             console.log(`${c.info('[INFO]')} Installed at: ${c.dim(appInstallPath)}`);
             console.log(`${c.tip('[TIP]')}  Run "cloudcli status" for full configuration details`);
             console.log('');

@@ -32,7 +32,15 @@
     "loadingSessions": "加载会话中...",
     "unnamed": "未命名",
     "loading": "加载中...",
-    "showMore": "显示更多会话"
+    "showMore": "显示更多会话",
+    "bucketPinned": "已置顶",
+    "bucketToday": "今天",
+    "bucketYesterday": "昨天",
+    "bucketThisWeek": "本周",
+    "bucketOlder": "更早"
+  },
+  "conversations": {
+    "empty": "暂无对话"
   },
   "tooltips": {
     "viewEnvironments": "查看环境",
@@ -48,7 +56,8 @@
     "save": "保存",
     "cancel": "取消",
     "clearSearch": "清除搜索",
-    "openCommandPalette": "打开命令面板"
+    "openCommandPalette": "打开命令面板",
+    "regenerateTitle": "AI 重新生成标题"
   },
   "navigation": {
     "chat": "聊天",
@@ -109,6 +118,21 @@
   },
   "version": {
     "updateAvailable": "有可用更新"
+  },
+  "update": {
+    "upstreamBadge": "↑ 上游 siteboon 更新",
+    "forkBadge": "↑ fork 更新",
+    "upstreamModalTitle": "上游有新版本",
+    "forkModalTitle": "Fork 有新版本",
+    "copyPrompt": "复制 Claude Code 提示词",
+    "copyPromptLabel": "Claude Code 提示词",
+    "copyPromptHint": "将此提示词粘贴到 Claude Code —— 它会审查上游变更并将相关内容应用到此 fork。",
+    "copyInstructions": "复制更新指令",
+    "copyInstructionsLabel": "更新指令",
+    "viewChanges": "在 GitHub 上查看变更",
+    "viewRelease": "在 GitHub 上查看发布",
+    "dismiss": "关闭",
+    "copied": "已复制！"
   },
   "search": {
     "modeProjects": "项目",

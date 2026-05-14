@@ -2,14 +2,15 @@ import { type ReactNode } from 'react';
 import { Archive, Folder, MessageSquare, RotateCcw, Search, Trash2 } from 'lucide-react';
 import type { TFunction } from 'i18next';
 import { ScrollArea } from '../../../../shared/view/ui';
-import type { Project } from '../../../../types/app';
+import type { Project, ProjectSession, LLMProvider } from '../../../../types/app';
 import type { ReleaseInfo } from '../../../../types/sharedTypes';
 import type { ConversationSearchResults, SearchProgress } from '../../hooks/useSidebarController';
-import type { ArchivedProjectListItem, ArchivedSessionListItem, SidebarSearchMode } from '../../types/types';
+import type { ArchivedProjectListItem, ArchivedSessionListItem, SessionWithProvider, SidebarSearchMode } from '../../types/types';
 import SessionProviderLogo from '../../../llm-logo-provider/SessionProviderLogo';
 import SidebarFooter from './SidebarFooter';
 import SidebarHeader from './SidebarHeader';
 import SidebarProjectList, { type SidebarProjectListProps } from './SidebarProjectList';
+import SidebarConversationList from './SidebarConversationList';
 import { getAllSessions } from '../../utils/utils';
 
 function HighlightedSnippet({ snippet, highlights }: { snippet: string; highlights: { start: number; end: number }[] }) {
@@ -142,8 +143,28 @@ type SidebarContentProps = {
   latestVersion: string | null;
   currentVersion: string;
   onShowVersionModal: () => void;
+  // Fork (b31o8321) update
+  forkUpdateAvailable: boolean;
+  forkLatestVersion: string | null;
+  onShowForkModal: () => void;
   onShowSettings: () => void;
   projectListProps: SidebarProjectListProps;
+  // Props for the flat conversation list (conversations mode, no active search)
+  selectedSession: ProjectSession | null;
+  selectedProject: Project | null;
+  currentTime: Date;
+  editingSession: string | null;
+  editingSessionName: string;
+  onEditingSessionNameChange: (value: string) => void;
+  onStartEditingSession: (sessionId: string, initialName: string) => void;
+  onCancelEditingSession: () => void;
+  onSaveEditingSession: (projectId: string, sessionId: string, summary: string, provider: LLMProvider) => void;
+  onConversationSessionClick: (session: SessionWithProvider & { __projectId: string }) => void;
+  onDeleteConversationSession: (projectId: string | null, sessionId: string, sessionTitle: string, provider: LLMProvider) => void;
+  onTogglePin: (sessionId: string) => void;
+  isSessionPinned: (sessionId: string) => boolean;
+  onRegenerateTitle?: (sessionId: string) => void;
+  isSessionTitleRegenerating?: (sessionId: string) => boolean;
   t: TFunction;
 };
 
@@ -178,11 +199,30 @@ export default function SidebarContent({
   latestVersion,
   currentVersion,
   onShowVersionModal,
+  forkUpdateAvailable,
+  forkLatestVersion,
+  onShowForkModal,
   onShowSettings,
   projectListProps,
+  selectedSession,
+  selectedProject,
+  currentTime,
+  editingSession,
+  editingSessionName,
+  onEditingSessionNameChange,
+  onStartEditingSession,
+  onCancelEditingSession,
+  onSaveEditingSession,
+  onConversationSessionClick,
+  onDeleteConversationSession,
+  onTogglePin,
+  isSessionPinned,
+  onRegenerateTitle,
+  isSessionTitleRegenerating,
   t,
 }: SidebarContentProps) {
   const showConversationSearch = searchMode === 'conversations' && searchFilter.trim().length >= 2;
+  const showConversationList = searchMode === 'conversations' && !showConversationSearch;
   const hasPartialResults = conversationResults && conversationResults.results.length > 0;
   const groupedArchivedSessions = groupArchivedSessionsByProject(archivedSessions);
 
@@ -508,8 +548,28 @@ export default function SidebarContent({
               ))}
             </div>
           )
+        ) : showConversationList ? (
+          <SidebarConversationList
+            projects={projects}
+            selectedSession={selectedSession}
+            selectedProject={selectedProject}
+            currentTime={currentTime}
+            editingSession={editingSession}
+            editingSessionName={editingSessionName}
+            onEditingSessionNameChange={onEditingSessionNameChange}
+            onStartEditingSession={onStartEditingSession}
+            onCancelEditingSession={onCancelEditingSession}
+            onSaveEditingSession={onSaveEditingSession}
+            onSessionSelect={onConversationSessionClick}
+            onDeleteSession={onDeleteConversationSession}
+            onTogglePin={onTogglePin}
+            isSessionPinned={isSessionPinned}
+            onRegenerateTitle={onRegenerateTitle}
+            isSessionTitleRegenerating={isSessionTitleRegenerating}
+            t={t}
+          />
         ) : (
-          <SidebarProjectList {...projectListProps} />
+          <SidebarProjectList {...projectListProps} onRegenerateTitle={onRegenerateTitle} isSessionTitleRegenerating={isSessionTitleRegenerating} />
         )}
       </ScrollArea>
 
@@ -519,6 +579,9 @@ export default function SidebarContent({
         latestVersion={latestVersion}
         currentVersion={currentVersion}
         onShowVersionModal={onShowVersionModal}
+        forkUpdateAvailable={forkUpdateAvailable}
+        forkLatestVersion={forkLatestVersion}
+        onShowForkModal={onShowForkModal}
         onShowSettings={onShowSettings}
         t={t}
       />

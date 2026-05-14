@@ -221,7 +221,8 @@
     "status": {
       "newSession": "New Session",
       "initializing": "Initializing...",
-      "restarting": "Restarting..."
+      "restarting": "Restarting...",
+      "reconnecting": "Reconnecting..."
     },
     "actions": {
       "disconnect": "Disconnect",
@@ -271,5 +272,6 @@
   },
   "tasks": {
     "nextTaskPrompt": "Start the next task"
-  }
+  },
+  "lastVisitDivider": "Last visit"
 }

@@ -7,8 +7,24 @@ import { TERMINAL_INIT_DELAY_MS } from '../constants/constants';
 import { getShellWebSocketUrl, parseShellMessage, sendSocketMessage } from '../utils/socket';
 
 const ANSI_ESCAPE_REGEX =
-  /(?:\u001B\[[0-?]*[ -/]*[@-~]|\u009B[0-?]*[ -/]*[@-~]|\u001B\][^\u0007\u001B]*(?:\u0007|\u001B\\)|\u009D[^\u0007\u009C]*(?:\u0007|\u009C)|\u001B[PX^_][^\u001B]*\u001B\\|[\u0090\u0098\u009E\u009F][^\u009C]*\u009C|\u001B[@-Z\\-_])/g;
+  /(?:\[[0-?]*[ -/]*[@-~]|[0-?]*[ -/]*[@-~]|\][^]*(?:|\\)|[^]*(?:|)|[PX^_][^]*\\|[][^]*|[@-Z\\-_])/g;
 const PROCESS_EXIT_REGEX = /Process exited with code (\d+)/;
+
+/** Interval for the client-side keepalive ping (ms). */
+const KEEPALIVE_INTERVAL_MS = 25_000;
+
+/** Initial reconnect delay (ms). */
+const RECONNECT_BASE_DELAY_MS = 2_000;
+
+/** Maximum reconnect delay after exponential backoff (ms). */
+const RECONNECT_MAX_DELAY_MS = 30_000;
+
+/**
+ * Auth-failure close codes (4000-4999): do not reconnect automatically.
+ * Regular unexpected disconnects (1000, 1001, 1006, etc.) trigger auto-reconnect.
+ */
+const AUTH_FAILURE_CLOSE_CODE_MIN = 4000;
+const AUTH_FAILURE_CLOSE_CODE_MAX = 4999;
 
 type UseShellConnectionOptions = {
   wsRef: MutableRefObject<WebSocket | null>;
@@ -30,6 +46,7 @@ type UseShellConnectionOptions = {
 type UseShellConnectionResult = {
   isConnected: boolean;
   isConnecting: boolean;
+  isReconnecting: boolean;
   closeSocket: () => void;
   connectToShell: () => void;
   disconnectFromShell: () => void;
@@ -53,7 +70,39 @@ export function useShellConnection({
 }: UseShellConnectionOptions): UseShellConnectionResult {
   const [isConnected, setIsConnected] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
+  const [isReconnecting, setIsReconnecting] = useState(false);
   const connectingRef = useRef(false);
+
+  // Reconnect state
+  const userDisconnectedRef = useRef(false);
+  const reconnectAttemptRef = useRef(0);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Keepalive interval
+  const keepaliveIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  function clearReconnectTimer() {
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+  }
+
+  function stopKeepalive() {
+    if (keepaliveIntervalRef.current) {
+      clearInterval(keepaliveIntervalRef.current);
+      keepaliveIntervalRef.current = null;
+    }
+  }
+
+  function startKeepalive(socket: WebSocket) {
+    stopKeepalive();
+    keepaliveIntervalRef.current = setInterval(() => {
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: 'keepalive' }));
+      }
+    }, KEEPALIVE_INTERVAL_MS);
+  }
 
   const handleProcessCompletion = useCallback(
     (output: string) => {
@@ -107,6 +156,29 @@ export function useShellConnection({
     [handleProcessCompletion, onOutputRef, setAuthUrl, terminalRef],
   );
 
+  // connectWebSocket is declared with useRef so it can reference itself for
+  // reconnect scheduling without triggering dependency-array churn.
+  const connectWebSocketRef = useRef<(isConnectionLocked?: boolean) => void>(() => {});
+
+  const scheduleReconnect = useCallback(() => {
+    clearReconnectTimer();
+
+    const attempt = reconnectAttemptRef.current;
+    const delay = Math.min(
+      RECONNECT_BASE_DELAY_MS * 2 ** attempt,
+      RECONNECT_MAX_DELAY_MS,
+    );
+    reconnectAttemptRef.current = attempt + 1;
+
+    console.log(`[Shell] Reconnecting in ${delay}ms (attempt ${attempt + 1})`);
+
+    reconnectTimerRef.current = setTimeout(() => {
+      if (!userDisconnectedRef.current) {
+        connectWebSocketRef.current(true);
+      }
+    }, delay);
+  }, []);
+
   const connectWebSocket = useCallback(
     (isConnectionLocked = false) => {
       if ((connectingRef.current && !isConnectionLocked) || isConnecting || isConnected) {
@@ -129,8 +201,11 @@ export function useShellConnection({
         socket.onopen = () => {
           setIsConnected(true);
           setIsConnecting(false);
+          setIsReconnecting(false);
           connectingRef.current = false;
+          reconnectAttemptRef.current = 0;
           setAuthUrl('');
+          startKeepalive(socket);
 
           window.setTimeout(() => {
             const currentTerminal = terminalRef.current;
@@ -161,21 +236,45 @@ export function useShellConnection({
           handleSocketMessage(rawPayload);
         };
 
-        socket.onclose = () => {
+        socket.onclose = (event) => {
+          stopKeepalive();
           setIsConnected(false);
-          setIsConnecting(false);
           connectingRef.current = false;
-          clearTerminalScreen();
+
+          const isAuthFailure =
+            event.code >= AUTH_FAILURE_CLOSE_CODE_MIN &&
+            event.code <= AUTH_FAILURE_CLOSE_CODE_MAX;
+
+          if (userDisconnectedRef.current || isAuthFailure) {
+            // Intentional disconnect or auth failure — do not reconnect.
+            setIsConnecting(false);
+            setIsReconnecting(false);
+            if (!userDisconnectedRef.current) {
+              // Auth failure: leave terminal visible with error state.
+              clearTerminalScreen();
+            } else {
+              clearTerminalScreen();
+            }
+            return;
+          }
+
+          // Unexpected disconnect — schedule auto-reconnect.
+          setIsReconnecting(true);
+          setIsConnecting(false);
+          scheduleReconnect();
         };
 
         socket.onerror = () => {
+          stopKeepalive();
           setIsConnected(false);
           setIsConnecting(false);
           connectingRef.current = false;
+          // onclose will fire right after onerror, so reconnect logic lives there.
         };
       } catch {
         setIsConnected(false);
         setIsConnecting(false);
+        setIsReconnecting(false);
         connectingRef.current = false;
       }
     },
@@ -187,6 +286,7 @@ export function useShellConnection({
       isConnected,
       isConnecting,
       isPlainShellRef,
+      scheduleReconnect,
       selectedProjectRef,
       selectedSessionRef,
       setAuthUrl,
@@ -195,17 +295,29 @@ export function useShellConnection({
     ],
   );
 
+  // Keep the ref up-to-date so scheduleReconnect always calls the latest version.
+  useEffect(() => {
+    connectWebSocketRef.current = connectWebSocket;
+  }, [connectWebSocket]);
+
   const connectToShell = useCallback(() => {
     if (!isInitialized || isConnected || isConnecting || connectingRef.current) {
       return;
     }
 
+    userDisconnectedRef.current = false;
+    reconnectAttemptRef.current = 0;
+    clearReconnectTimer();
     connectingRef.current = true;
     setIsConnecting(true);
     connectWebSocket(true);
   }, [connectWebSocket, isConnected, isConnecting, isInitialized]);
 
   const disconnectFromShell = useCallback(() => {
+    userDisconnectedRef.current = true;
+    clearReconnectTimer();
+    stopKeepalive();
+    setIsReconnecting(false);
     closeSocket();
     clearTerminalScreen();
     setIsConnected(false);
@@ -222,9 +334,18 @@ export function useShellConnection({
     connectToShell();
   }, [autoConnect, connectToShell, isConnected, isConnecting, isInitialized]);
 
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      clearReconnectTimer();
+      stopKeepalive();
+    };
+  }, []);
+
   return {
     isConnected,
     isConnecting,
+    isReconnecting,
     closeSocket,
     connectToShell,
     disconnectFromShell,

@@ -2,6 +2,7 @@ type ShellHeaderProps = {
   isConnected: boolean;
   isInitialized: boolean;
   isRestarting: boolean;
+  isReconnecting?: boolean;
   hasSession: boolean;
   sessionDisplayNameShort: string | null;
   onDisconnect: () => void;
@@ -9,6 +10,7 @@ type ShellHeaderProps = {
   statusNewSessionText: string;
   statusInitializingText: string;
   statusRestartingText: string;
+  statusReconnectingText?: string;
   disconnectLabel: string;
   disconnectTitle: string;
   restartLabel: string;
@@ -20,6 +22,7 @@ export default function ShellHeader({
   isConnected,
   isInitialized,
   isRestarting,
+  isReconnecting = false,
   hasSession,
   sessionDisplayNameShort,
   onDisconnect,
@@ -27,17 +30,24 @@ export default function ShellHeader({
   statusNewSessionText,
   statusInitializingText,
   statusRestartingText,
+  statusReconnectingText = 'Reconnecting…',
   disconnectLabel,
   disconnectTitle,
   restartLabel,
   restartTitle,
   disableRestart,
 }: ShellHeaderProps) {
+  const dotColor = isConnected
+    ? 'bg-green-500'
+    : isReconnecting
+      ? 'bg-amber-400 animate-pulse'
+      : 'bg-red-500';
+
   return (
     <div className="flex-shrink-0 border-b border-gray-700 bg-gray-800 px-4 py-2">
       <div className="flex items-center justify-between">
         <div className="flex items-center space-x-2">
-          <div className={`h-2 w-2 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500'}`} />
+          <div className={`h-2 w-2 rounded-full ${dotColor}`} />
 
           {hasSession && sessionDisplayNameShort && (
             <span className="text-xs text-blue-300">({sessionDisplayNameShort}...)</span>
@@ -48,6 +58,10 @@ export default function ShellHeader({
           {!isInitialized && <span className="text-xs text-yellow-400">{statusInitializingText}</span>}
 
           {isRestarting && <span className="text-xs text-blue-400">{statusRestartingText}</span>}
+
+          {isReconnecting && !isConnected && (
+            <span className="text-xs text-amber-400">{statusReconnectingText}</span>
+          )}
         </div>
 
         <div className="flex items-center space-x-3">

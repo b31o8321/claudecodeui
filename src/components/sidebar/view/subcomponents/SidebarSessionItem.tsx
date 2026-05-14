@@ -1,4 +1,4 @@
-import { Check, Edit2, Trash2, X } from 'lucide-react';
+import { Check, Edit2, Pin, PinOff, RefreshCw, Trash2, X } from 'lucide-react';
 import type { TFunction } from 'i18next';
 
 import { Badge, Button } from '../../../../shared/view/ui';
@@ -15,6 +15,7 @@ type SidebarSessionItemProps = {
   currentTime: Date;
   editingSession: string | null;
   editingSessionName: string;
+  isPinned: boolean;
   onEditingSessionNameChange: (value: string) => void;
   onStartEditingSession: (sessionId: string, initialName: string) => void;
   onCancelEditingSession: () => void;
@@ -27,6 +28,11 @@ type SidebarSessionItemProps = {
     sessionTitle: string,
     provider: LLMProvider,
   ) => void;
+  onTogglePin: (sessionId: string) => void;
+  onRegenerateTitle?: (sessionId: string) => void;
+  isRegeneratingTitle?: boolean;
+  /** When true, renders the project name below the session title (used in the flat conversation list). */
+  showProjectName?: boolean;
   t: TFunction;
 };
 
@@ -65,6 +71,7 @@ export default function SidebarSessionItem({
   currentTime,
   editingSession,
   editingSessionName,
+  isPinned,
   onEditingSessionNameChange,
   onStartEditingSession,
   onCancelEditingSession,
@@ -72,6 +79,10 @@ export default function SidebarSessionItem({
   onProjectSelect,
   onSessionSelect,
   onDeleteSession,
+  onTogglePin,
+  onRegenerateTitle,
+  isRegeneratingTitle = false,
+  showProjectName = false,
   t,
 }: SidebarSessionItemProps) {
   const sessionView = createSessionViewModel(session, currentTime, t);
@@ -129,6 +140,11 @@ export default function SidebarSessionItem({
                   <span className="ml-auto flex-shrink-0 text-[11px] text-muted-foreground">{compactSessionAge}</span>
                 )}
               </div>
+              {showProjectName && session.__projectDisplayName && (
+                <div className="mt-0.5 truncate text-[10px] text-muted-foreground/60">
+                  {session.__projectDisplayName}
+                </div>
+              )}
               <div className="mt-0.5 flex items-center">
                 {sessionView.messageCount > 0 && (
                   <Badge variant="secondary" className="px-1 py-0 text-xs">
@@ -173,6 +189,11 @@ export default function SidebarSessionItem({
                   </span>
                 )}
               </div>
+              {showProjectName && session.__projectDisplayName && (
+                <div className="mt-0.5 truncate text-[10px] text-muted-foreground/60">
+                  {session.__projectDisplayName}
+                </div>
+              )}
               <div className="mt-0.5 flex items-center">
                 {sessionView.messageCount > 0 && <Badge variant="secondary" className="px-1 py-0 text-xs">{sessionView.messageCount}</Badge>}
               </div>
@@ -222,6 +243,41 @@ export default function SidebarSessionItem({
               </>
             ) : (
               <>
+                <button
+                  className={cn(
+                    'flex h-6 w-6 items-center justify-center rounded',
+                    isPinned
+                      ? 'bg-blue-50 hover:bg-blue-100 dark:bg-blue-900/20 dark:hover:bg-blue-900/40'
+                      : 'bg-gray-50 hover:bg-gray-100 dark:bg-gray-900/20 dark:hover:bg-gray-900/40',
+                  )}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onTogglePin(session.id);
+                  }}
+                  title={isPinned ? 'Unpin session' : 'Pin session'}
+                >
+                  {isPinned ? (
+                    <PinOff className="h-3 w-3 text-blue-600 dark:text-blue-400" />
+                  ) : (
+                    <Pin className="h-3 w-3 text-gray-600 dark:text-gray-400" />
+                  )}
+                </button>
+                {onRegenerateTitle && (
+                  <button
+                    className={cn(
+                      'flex h-6 w-6 items-center justify-center rounded bg-purple-50 hover:bg-purple-100 dark:bg-purple-900/20 dark:hover:bg-purple-900/40',
+                      isRegeneratingTitle && 'pointer-events-none opacity-50',
+                    )}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onRegenerateTitle(session.id);
+                    }}
+                    title={t('tooltips.regenerateTitle')}
+                    disabled={isRegeneratingTitle}
+                  >
+                    <RefreshCw className={cn('h-3 w-3 text-purple-600 dark:text-purple-400', isRegeneratingTitle && 'animate-spin')} />
+                  </button>
+                )}
                 <button
                   className="flex h-6 w-6 items-center justify-center rounded bg-gray-50 hover:bg-gray-100 dark:bg-gray-900/20 dark:hover:bg-gray-900/40"
                   onClick={(event) => {
