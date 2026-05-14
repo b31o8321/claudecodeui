@@ -133,6 +133,96 @@ Open `http://localhost:3001`.
 
 ---
 
+## Running as a Service (without Homebrew)
+
+For users who prefer not to use Homebrew, or who are running on Linux, the repo ships a portable bash wrapper and service templates.
+
+### Quick symlink — everyday CLI use
+
+```sh
+ln -s /path/to/claudecodeui/bin/cloudcli-fork /usr/local/bin/cloudcli-fork
+
+cloudcli-fork start    # start in background
+cloudcli-fork stop     # stop
+cloudcli-fork status   # show PID and port (exit 0=running, 3=stopped)
+cloudcli-fork restart  # stop + start
+cloudcli-fork logs     # tail -f the log file
+cloudcli-fork run      # foreground (used by systemd/launchd)
+cloudcli-fork help     # usage summary
+```
+
+State files are stored in `~/.cloudcli/`:
+
+| File | Purpose |
+|---|---|
+| `cloudcli-fork.pid` | PID of the background process |
+| `cloudcli-fork.log` | stdout log |
+| `cloudcli-fork.err.log` | stderr / error log |
+
+`start` reads `~/.cloudcli/config.json` for the `port` field (defaults to `3001`). If the PID file points to an already-running process, `start` prints "already running (PID X)" and exits non-zero — no double-starts.
+
+---
+
+### macOS — auto-start on login via launchd
+
+A LaunchAgent template lives at `scripts/launchd/ai.cloudcli.fork.plist.template`.
+
+**Install (one-liner, run from the claudecodeui directory):**
+```sh
+sed "s|{INSTALL_DIR}|$(pwd)|g; s|{HOME}|$HOME|g" \
+  scripts/launchd/ai.cloudcli.fork.plist.template \
+  > ~/Library/LaunchAgents/ai.cloudcli.fork.plist
+launchctl load ~/Library/LaunchAgents/ai.cloudcli.fork.plist
+```
+
+**Stop / disable:**
+```sh
+launchctl unload ~/Library/LaunchAgents/ai.cloudcli.fork.plist
+```
+
+**Re-read config after editing `~/.cloudcli/config.json`:**
+```sh
+launchctl unload ~/Library/LaunchAgents/ai.cloudcli.fork.plist
+launchctl load   ~/Library/LaunchAgents/ai.cloudcli.fork.plist
+```
+
+> **nvm / fnm / volta note:** launchd agents run in a minimal environment — the PATH it sees is `/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin`. If node was installed via a version manager it will *not* be on that PATH.
+>
+> Fix: symlink node into a directory that *is* on the launchd PATH:
+> ```sh
+> sudo ln -s "$(which node)" /usr/local/bin/node
+> sudo ln -s "$(which npx)"  /usr/local/bin/npx
+> ```
+> Or edit the `PATH` string inside `~/Library/LaunchAgents/ai.cloudcli.fork.plist`'s `EnvironmentVariables` dict to include your version manager's bin directory (e.g. `/Users/you/.nvm/versions/node/v22.0.0/bin`).
+
+---
+
+### Linux — auto-start on login via systemd
+
+A systemd user unit template lives at `scripts/systemd/cloudcli-fork.service.template`.
+
+**Install (one-liner, run from the claudecodeui directory):**
+```sh
+mkdir -p ~/.config/systemd/user
+sed "s|{INSTALL_DIR}|$(pwd)|g" \
+  scripts/systemd/cloudcli-fork.service.template \
+  > ~/.config/systemd/user/cloudcli-fork.service
+systemctl --user daemon-reload
+systemctl --user enable --now cloudcli-fork
+```
+
+**Useful commands:**
+```sh
+systemctl --user status  cloudcli-fork
+systemctl --user restart cloudcli-fork
+systemctl --user stop    cloudcli-fork
+journalctl --user -u cloudcli-fork -f   # live logs via journal
+```
+
+> **nvm / fnm / volta note:** systemd user units also inherit a minimal PATH. If `which node` doesn't work in a non-login shell, uncomment and set the `Environment="PATH=..."` line inside the generated `.service` file, then run `systemctl --user daemon-reload && systemctl --user restart cloudcli-fork`.
+
+---
+
 ## Configuration — `~/.cloudcli/config.json`
 
 `brew install` seeds a default config file. Edit it to control network exposure:

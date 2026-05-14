@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  LaunchAgent template for cloudcli-fork (macOS).
+
+  SETUP:
+    1. Replace {INSTALL_DIR} with the absolute path to your claudecodeui checkout.
+    2. Replace {HOME} with your home directory (e.g. /Users/yourname).
+       Or run the one-liner from the README — it does the substitution for you.
+    3. Copy the result to ~/Library/LaunchAgents/ai.cloudcli.fork.plist
+    4. Load: launchctl load ~/Library/LaunchAgents/ai.cloudcli.fork.plist
+
+  One-liner (run from the claudecodeui directory):
+    sed "s|{INSTALL_DIR}|$(pwd)|g; s|{HOME}|$HOME|g" \
+      scripts/launchd/ai.cloudcli.fork.plist.template \
+      > ~/Library/LaunchAgents/ai.cloudcli.fork.plist
+    launchctl load ~/Library/LaunchAgents/ai.cloudcli.fork.plist
+
+  STOP / UNLOAD:
+    launchctl unload ~/Library/LaunchAgents/ai.cloudcli.fork.plist
+
+  NODE PATH NOTE:
+    If node was installed via nvm, it will NOT be on the default launchd PATH.
+    Two options:
+      a) Symlink node into /usr/local/bin:
+           ln -s "$(which node)" /usr/local/bin/node
+           ln -s "$(which npx)"  /usr/local/bin/npx
+      b) Edit the PATH in EnvironmentVariables below to include your nvm shims,
+         e.g. /Users/yourname/.nvm/versions/node/v22.0.0/bin
+    Run `which node` in a terminal (not a login shell) to confirm the right path.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>ai.cloudcli.fork</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>{INSTALL_DIR}/bin/cloudcli-fork</string>
+    <string>run</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>{INSTALL_DIR}</string>
+
+  <!-- Start automatically when the user logs in -->
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- Restart on crash; SuccessfulExit=false prevents restart on clean exit -->
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+
+  <key>StandardOutPath</key>
+  <string>{HOME}/.cloudcli/cloudcli-fork.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>{HOME}/.cloudcli/cloudcli-fork.err.log</string>
+
+  <!--
+    PATH for launchd agents is minimal (/usr/bin:/bin:/usr/sbin:/sbin).
+    We add /usr/local/bin (Homebrew, manually-installed node) and
+    /opt/homebrew/bin (Apple Silicon Homebrew).
+
+    If your node lives elsewhere (nvm, fnm, volta), add its bin directory here
+    or symlink node into /usr/local/bin as described above.
+  -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+</dict>
+</plist>

@@ -1,0 +1,44 @@
+# cloudcli-fork.service.template — systemd user unit for cloudcli-fork (Linux)
+#
+# SETUP (one-liner, run from the claudecodeui directory):
+#   mkdir -p ~/.config/systemd/user
+#   sed "s|{INSTALL_DIR}|$(pwd)|g" \
+#     scripts/systemd/cloudcli-fork.service.template \
+#     > ~/.config/systemd/user/cloudcli-fork.service
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now cloudcli-fork
+#
+# USEFUL COMMANDS:
+#   systemctl --user status  cloudcli-fork
+#   systemctl --user restart cloudcli-fork
+#   systemctl --user stop    cloudcli-fork
+#   journalctl --user -u cloudcli-fork -f   # live logs via journal
+#
+# NODE PATH NOTE:
+#   systemd user units inherit a minimal PATH. If node was installed via nvm,
+#   fnm, or volta, uncomment the Environment line below and add the bin
+#   directory that contains your node binary (e.g. /home/user/.nvm/versions/node/v22.x.x/bin).
+#   Find the right path with:  dirname "$(which node)"
+
+[Unit]
+Description=CloudCLI Fork — Self-hosted Claude Code UI
+After=network.target
+
+[Service]
+Type=simple
+ExecStart={INSTALL_DIR}/bin/cloudcli-fork run
+Restart=on-failure
+RestartSec=5
+
+# Log to files under ~/.cloudcli/ (same location the manual start command uses).
+# Use journalctl --user -u cloudcli-fork for journal-based log viewing instead.
+StandardOutput=append:%h/.cloudcli/cloudcli-fork.log
+StandardError=append:%h/.cloudcli/cloudcli-fork.err.log
+
+WorkingDirectory={INSTALL_DIR}
+
+# Uncomment and adjust if node isn't on the default user PATH:
+# Environment="PATH=/usr/local/bin:/usr/bin:/bin"
+
+[Install]
+WantedBy=default.target

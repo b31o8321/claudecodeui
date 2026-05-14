@@ -1,0 +1,306 @@
+#!/usr/bin/env bash
+# cloudcli-fork — service wrapper for the claudecodeui personal fork
+# Make this executable: chmod +x bin/cloudcli-fork
+# Symlink into PATH: ln -s /path/to/claudecodeui/bin/cloudcli-fork /usr/local/bin/cloudcli-fork
+set -euo pipefail
+
+# ---------------------------------------------------------------------------
+# Resolve script location regardless of symlinks or invocation path
+# ---------------------------------------------------------------------------
+_resolve_script_dir() {
+  local src="$0"
+  # Follow symlinks portably (BSD readlink lacks -f)
+  while [ -L "$src" ]; do
+    local dir
+    dir="$(cd "$(dirname "$src")" && pwd)"
+    src="$(readlink "$src")"
+    # Handle relative symlinks
+    case "$src" in
+      /*) ;;
+      *) src="$dir/$src" ;;
+    esac
+  done
+  cd "$(dirname "$src")" && pwd
+}
+
+SCRIPT_DIR="$(_resolve_script_dir)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+
+# ---------------------------------------------------------------------------
+# State file locations
+# ---------------------------------------------------------------------------
+STATE_DIR="${HOME}/.cloudcli"
+PID_FILE="${STATE_DIR}/cloudcli-fork.pid"
+LOG_FILE="${STATE_DIR}/cloudcli-fork.log"
+ERR_LOG_FILE="${STATE_DIR}/cloudcli-fork.err.log"
+
+mkdir -p "$STATE_DIR"
+
+# ---------------------------------------------------------------------------
+# Read port from config (default 3001)
+# ---------------------------------------------------------------------------
+_read_port() {
+  local config_file="${STATE_DIR}/config.json"
+  if [ -f "$config_file" ]; then
+    # Extract port with portable shell — no jq dependency required
+    local port
+    port="$(grep -o '"port"[[:space:]]*:[[:space:]]*[0-9]*' "$config_file" 2>/dev/null \
+      | grep -o '[0-9]*$' || true)"
+    if [ -n "$port" ]; then
+      printf '%s' "$port"
+      return
+    fi
+  fi
+  printf '3001'
+}
+
+# ---------------------------------------------------------------------------
+# Determine node command: prefer compiled build, fall back to tsx for dev
+# ---------------------------------------------------------------------------
+_node_cmd() {
+  local dist="${PROJECT_ROOT}/dist-server/server/index.js"
+  if [ -f "$dist" ]; then
+    printf 'node %s' "$dist"
+  else
+    # Dev install — tsx must be available
+    printf 'npx tsx --tsconfig %s/server/tsconfig.json %s/server/index.js' \
+      "$PROJECT_ROOT" "$PROJECT_ROOT"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# PID helpers
+# ---------------------------------------------------------------------------
+_read_pid() {
+  if [ -f "$PID_FILE" ]; then
+    cat "$PID_FILE"
+  else
+    printf ''
+  fi
+}
+
+_pid_alive() {
+  local pid="$1"
+  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+}
+
+# ---------------------------------------------------------------------------
+# Sub-commands
+# ---------------------------------------------------------------------------
+
+cmd_start() {
+  local pid
+  pid="$(_read_pid)"
+  if _pid_alive "$pid"; then
+    printf 'cloudcli-fork: already running (PID %s)\n' "$pid" >&2
+    exit 1
+  fi
+
+  local port
+  port="$(_read_port)"
+
+  local node_cmd
+  node_cmd="$(_node_cmd)"
+
+  printf 'Starting cloudcli-fork on port %s...\n' "$port"
+  # Fork: redirect stdout/stderr to log files, run in background, record PID
+  # Use env -P to avoid issues with nvm node not being on PATH when called via launchd
+  (
+    export PORT="$port"
+    # shellcheck disable=SC2086
+    exec $node_cmd \
+      >> "$LOG_FILE" 2>> "$ERR_LOG_FILE"
+  ) &
+  local bg_pid=$!
+  printf '%s' "$bg_pid" > "$PID_FILE"
+  printf 'Started (PID %s). Logs: %s\n' "$bg_pid" "$LOG_FILE"
+}
+
+cmd_stop() {
+  local pid
+  pid="$(_read_pid)"
+  if ! _pid_alive "$pid"; then
+    printf 'cloudcli-fork: not running\n'
+    rm -f "$PID_FILE"
+    return 0
+  fi
+
+  printf 'Stopping cloudcli-fork (PID %s)...\n' "$pid"
+  kill -TERM "$pid" 2>/dev/null || true
+
+  # Wait up to 10 seconds for graceful shutdown
+  local i=0
+  while _pid_alive "$pid" && [ "$i" -lt 10 ]; do
+    sleep 1
+    i=$((i + 1))
+  done
+
+  if _pid_alive "$pid"; then
+    printf 'Process did not exit after 10s — sending SIGKILL\n' >&2
+    kill -KILL "$pid" 2>/dev/null || true
+  fi
+
+  rm -f "$PID_FILE"
+  printf 'Stopped.\n'
+}
+
+cmd_restart() {
+  cmd_stop
+  cmd_start
+}
+
+cmd_status() {
+  local pid
+  pid="$(_read_pid)"
+  local port
+  port="$(_read_port)"
+
+  if _pid_alive "$pid"; then
+    printf 'cloudcli-fork is running\n'
+    printf '  PID:  %s\n' "$pid"
+    printf '  Port: %s\n' "$port"
+    printf '  URL:  http://localhost:%s\n' "$port"
+    exit 0
+  else
+    printf 'cloudcli-fork is not running\n'
+    # Exit 3 = "not running" per systemd/LSB convention
+    exit 3
+  fi
+}
+
+cmd_logs() {
+  exec tail -f "$LOG_FILE"
+}
+
+cmd_run() {
+  # Run in foreground — no forking. This is what systemd/launchd should call.
+  local port
+  port="$(_read_port)"
+  local node_cmd
+  node_cmd="$(_node_cmd)"
+
+  export PORT="$port"
+  # exec replaces the shell with node — clean signal propagation
+  # shellcheck disable=SC2086
+  exec $node_cmd
+}
+
+# ---------------------------------------------------------------------------
+# Bind mode helpers — rewrite config.json's `bind` field and restart
+# ---------------------------------------------------------------------------
+_read_bind() {
+  local config_file="${STATE_DIR}/config.json"
+  if [ -f "$config_file" ]; then
+    local mode
+    mode="$(grep -o '"bind"[[:space:]]*:[[:space:]]*"[^"]*"' "$config_file" 2>/dev/null \
+      | sed -E 's/.*"bind"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/' || true)"
+    if [ -n "$mode" ]; then
+      printf '%s' "$mode"
+      return
+    fi
+  fi
+  printf 'lan'
+}
+
+_write_bind() {
+  # Rewrites ~/.cloudcli/config.json with the requested bind mode, preserving
+  # port and publicUrl when present. Creates the file with defaults otherwise.
+  local new_bind="$1"
+  local config_file="${STATE_DIR}/config.json"
+  local port public_url
+
+  port="$(_read_port)"
+
+  public_url=""
+  if [ -f "$config_file" ]; then
+    public_url="$(grep -o '"publicUrl"[[:space:]]*:[[:space:]]*"[^"]*"' "$config_file" 2>/dev/null \
+      | sed -E 's/.*"publicUrl"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/' || true)"
+  fi
+
+  local public_url_json='null'
+  if [ -n "$public_url" ]; then
+    public_url_json="\"${public_url}\""
+  fi
+
+  cat > "$config_file" <<EOF
+{
+  "bind": "${new_bind}",
+  "port": ${port},
+  "publicUrl": ${public_url_json}
+}
+EOF
+}
+
+cmd_local() {
+  _write_bind "localhost"
+  printf '~/.cloudcli/config.json: bind=localhost\n'
+  if [ -n "$(_read_pid)" ]; then
+    printf 'Restarting service…\n'
+    cmd_restart
+  else
+    printf 'Service is not running. Use `cloudcli-fork start` to start it.\n'
+  fi
+}
+
+cmd_lan() {
+  _write_bind "lan"
+  printf '~/.cloudcli/config.json: bind=lan\n'
+  if [ -n "$(_read_pid)" ]; then
+    printf 'Restarting service…\n'
+    cmd_restart
+  else
+    printf 'Service is not running. Use `cloudcli-fork start` to start it.\n'
+  fi
+}
+
+cmd_help() {
+  cat <<'EOF'
+Usage: cloudcli-fork <command>
+
+Lifecycle:
+  start    Start as background process (writes PID to ~/.cloudcli/cloudcli-fork.pid)
+  stop     Stop the background process (SIGTERM, then SIGKILL after 10s)
+  restart  stop + start
+  status   Show whether running, PID, and port (exit 0=running, 3=stopped)
+  logs     tail -f the log file (~/.cloudcli/cloudcli-fork.log)
+  run      Run in foreground — use this as ExecStart for systemd/launchd
+
+Bind mode:
+  local    Set bind=localhost (only this machine) and restart if running
+  lan      Set bind=lan (0.0.0.0, accessible on LAN) and restart if running
+
+Misc:
+  help     Show this message
+
+State files:
+  PID:      ~/.cloudcli/cloudcli-fork.pid
+  Log:      ~/.cloudcli/cloudcli-fork.log
+  Err log:  ~/.cloudcli/cloudcli-fork.err.log
+  Config:   ~/.cloudcli/config.json
+
+Config (config.json):
+  { "bind": "lan", "port": 3001, "publicUrl": null }
+
+EOF
+}
+
+# ---------------------------------------------------------------------------
+# Dispatch
+# ---------------------------------------------------------------------------
+CMD="${1:-help}"
+case "$CMD" in
+  start)   cmd_start   ;;
+  stop)    cmd_stop    ;;
+  restart) cmd_restart ;;
+  status)  cmd_status  ;;
+  logs)    cmd_logs    ;;
+  run)     cmd_run     ;;
+  local)   cmd_local   ;;
+  lan)     cmd_lan     ;;
+  help|--help|-h) cmd_help ;;
+  *)
+    printf 'cloudcli-fork: unknown command: %s\n' "$CMD" >&2
+    cmd_help >&2
+    exit 1
+    ;;
+esac

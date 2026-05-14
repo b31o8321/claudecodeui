@@ -133,6 +133,96 @@ npm run dev
 
 ---
 
+## 以服务方式运行（不使用 Homebrew）
+
+不想用 Homebrew，或者在 Linux 上运行的用户，可以使用仓库内置的跨平台 bash 包装脚本和服务模板。
+
+### 快速符号链接 — 日常命令行使用
+
+```sh
+ln -s /path/to/claudecodeui/bin/cloudcli-fork /usr/local/bin/cloudcli-fork
+
+cloudcli-fork start    # 在后台启动
+cloudcli-fork stop     # 停止
+cloudcli-fork status   # 查看 PID 和端口（退出码 0=运行中，3=未运行）
+cloudcli-fork restart  # 停止后重启
+cloudcli-fork logs     # tail -f 日志文件
+cloudcli-fork run      # 前台运行（供 systemd/launchd 调用）
+cloudcli-fork help     # 查看用法说明
+```
+
+状态文件存放在 `~/.cloudcli/`：
+
+| 文件 | 用途 |
+|---|---|
+| `cloudcli-fork.pid` | 后台进程的 PID |
+| `cloudcli-fork.log` | 标准输出日志 |
+| `cloudcli-fork.err.log` | 错误日志 |
+
+`start` 会读取 `~/.cloudcli/config.json` 中的 `port` 字段（默认 `3001`）。若 PID 文件指向的进程已在运行，`start` 会打印"already running (PID X)"并以非零状态退出，防止重复启动。
+
+---
+
+### macOS — 通过 launchd 实现登录自启
+
+LaunchAgent 模板位于 `scripts/launchd/ai.cloudcli.fork.plist.template`。
+
+**安装（在 claudecodeui 目录下执行一行命令）：**
+```sh
+sed "s|{INSTALL_DIR}|$(pwd)|g; s|{HOME}|$HOME|g" \
+  scripts/launchd/ai.cloudcli.fork.plist.template \
+  > ~/Library/LaunchAgents/ai.cloudcli.fork.plist
+launchctl load ~/Library/LaunchAgents/ai.cloudcli.fork.plist
+```
+
+**停止 / 禁用：**
+```sh
+launchctl unload ~/Library/LaunchAgents/ai.cloudcli.fork.plist
+```
+
+**修改 `~/.cloudcli/config.json` 后重新加载：**
+```sh
+launchctl unload ~/Library/LaunchAgents/ai.cloudcli.fork.plist
+launchctl load   ~/Library/LaunchAgents/ai.cloudcli.fork.plist
+```
+
+> **nvm / fnm / volta 注意：** launchd 代理运行在精简环境中，其 PATH 仅包含 `/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin`。如果 node 是通过版本管理器安装的，launchd 将无法找到它。
+>
+> 解决方法：将 node 符号链接到 launchd PATH 已包含的目录：
+> ```sh
+> sudo ln -s "$(which node)" /usr/local/bin/node
+> sudo ln -s "$(which npx)"  /usr/local/bin/npx
+> ```
+> 或者直接编辑 `~/Library/LaunchAgents/ai.cloudcli.fork.plist` 中 `EnvironmentVariables` 下的 `PATH` 字段，加入版本管理器的 bin 目录（例如 `/Users/yourname/.nvm/versions/node/v22.0.0/bin`）。
+
+---
+
+### Linux — 通过 systemd 实现登录自启
+
+systemd 用户单元模板位于 `scripts/systemd/cloudcli-fork.service.template`。
+
+**安装（在 claudecodeui 目录下执行一行命令）：**
+```sh
+mkdir -p ~/.config/systemd/user
+sed "s|{INSTALL_DIR}|$(pwd)|g" \
+  scripts/systemd/cloudcli-fork.service.template \
+  > ~/.config/systemd/user/cloudcli-fork.service
+systemctl --user daemon-reload
+systemctl --user enable --now cloudcli-fork
+```
+
+**常用命令：**
+```sh
+systemctl --user status  cloudcli-fork
+systemctl --user restart cloudcli-fork
+systemctl --user stop    cloudcli-fork
+journalctl --user -u cloudcli-fork -f   # 通过 journal 查看实时日志
+```
+
+> **nvm / fnm / volta 注意：** systemd 用户单元同样继承精简的 PATH。若 node 在非登录 shell 中不可用，请取消注释并设置生成的 `.service` 文件中的 `Environment="PATH=..."` 行，然后执行 `systemctl --user daemon-reload && systemctl --user restart cloudcli-fork`。
+
+---
+
 ## 配置文件 — `~/.cloudcli/config.json`
 
 `brew install` 安装时会自动生成默认配置文件。编辑该文件可控制网络访问范围：
